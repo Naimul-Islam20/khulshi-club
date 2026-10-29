@@ -1,0 +1,3 @@
+# Run package.json scripts (vite, etc.) on the Bun runtime instead of Node
+[run]
+bun = true

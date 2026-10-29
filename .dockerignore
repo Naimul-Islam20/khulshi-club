@@ -1,0 +1,36 @@
+# Dependencies and build output are recreated inside the image
+node_modules
+dist
+dist-ssr
+.vite
+*.tsbuildinfo
+coverage
+
+# VCS / CI / editor
+.git
+.gitignore
+.github
+.vscode
+.idea
+.claude
+*.swp
+*.sw?
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+npm-debug.log*
+bun-debug.log*
+
+# Local env files — never bake secrets into the image
+.env
+.env.*
+!.env.example
+
+# Docker files themselves
+Dockerfile
+.dockerignore
+
+# NOTE: .figma/ is intentionally NOT ignored — vite.config.ts imports .figma/make/site.json
