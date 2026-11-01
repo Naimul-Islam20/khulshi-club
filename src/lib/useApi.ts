@@ -9,12 +9,36 @@ const cache = new Map<string, unknown>()
 const pending = new Map<string, Promise<unknown>>()
 
 function load<T>(path: string): Promise<T> {
-  let p = pending.get(path) as Promise<T> | undefined
-  if (!p) {
-    p = apiGet<T>(path).finally(() => pending.delete(path))
-    pending.set(path, p)
-  }
+  const existing = pending.get(path) as Promise<T> | undefined
+  if (existing) return existing
+
+  const p = apiGet<T>(path)
+    .then((d) => {
+      cache.set(path, d)
+      return d
+    })
+    .finally(() => {
+      // Only clear if this is still the active in-flight request for the path.
+      if (pending.get(path) === p) pending.delete(path)
+    })
+
+  pending.set(path, p)
   return p
+}
+
+/** Drop cached / in-flight GETs (e.g. after CMS publish). */
+export function invalidateApiCache(pathPrefix?: string) {
+  if (!pathPrefix) {
+    cache.clear()
+    pending.clear()
+    return
+  }
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(pathPrefix)) cache.delete(key)
+  }
+  for (const key of [...pending.keys()]) {
+    if (key.startsWith(pathPrefix)) pending.delete(key)
+  }
 }
 
 export function useApi<T>(path: string | null) {
@@ -24,19 +48,35 @@ export function useApi<T>(path: string | null) {
   const [nonce, setNonce] = useState(0)
 
   useEffect(() => {
-    if (!path) return
+    if (!path) {
+      setData(null)
+      setError(null)
+      setLoading(false)
+      return
+    }
+
     let alive = true
-    if (cache.has(path)) setData(cache.get(path) as T)
-    else setLoading(true)
-    setError(null)
+
+    if (cache.has(path)) {
+      setData(cache.get(path) as T)
+      setLoading(false)
+      setError(null)
+    } else {
+      setLoading(true)
+      setError(null)
+    }
 
     load<T>(path)
       .then((d) => {
-        cache.set(path, d)
-        if (alive) setData(d)
+        if (!alive) return
+        setData(d)
+        setError(null)
       })
       .catch((e: Error) => {
-        if (alive) setError(e.message)
+        if (!alive) return
+        setError(e.message || 'Request failed')
+        // Keep any previous data; only clear when we had nothing.
+        setData((prev) => prev)
       })
       .finally(() => {
         if (alive) setLoading(false)
@@ -48,7 +88,10 @@ export function useApi<T>(path: string | null) {
   }, [path, nonce])
 
   const reload = useCallback(() => {
-    if (path) cache.delete(path)
+    if (path) {
+      cache.delete(path)
+      pending.delete(path)
+    }
     setNonce((n) => n + 1)
   }, [path])
 

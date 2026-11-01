@@ -1,13 +1,8 @@
-// Membership application — applicant accounts and the membership form.
-// Front-end only for now: everything is kept in this browser's localStorage
-// until there's a backend to register, sign in and submit to.
+// Membership application — local draft account + form in localStorage;
+// final submit goes to POST /club-portal/apply.
 
-export const MEMBERSHIP_CATEGORIES = [
-  'Donor Member', 'Life Member', 'Permanent Member', 'Corporate Member', 'Founding Member',
-  'Service Member', 'Temporary Member', 'Honorary Member', 'Diplomat & Foreign National Member',
-] as const
-
-export const REGISTRATION_FEE = 1000
+// Membership categories, their fees and the registration fee come from
+// club-portal/settings (see lib/apply.ts) — nothing is hardcoded here.
 
 export type Address = {
   address: string; policeStation: string; postOffice: string; postalCode: string; district: string; country: string
@@ -34,7 +29,10 @@ export type ApplicationForm = {
   }
   professional: { profession: string; designation: string; company: string; address: Address }
   otherClubs: OtherClub[]
+  /** Display label (membership type name) */
   category: string
+  /** UUID from club-portal/settings → membership_types */
+  membership_type_id: string
   proposer: { name: string; memberId: string }
   documents: { nidCopy: string | null; photos: string | null; tradeLicence: string | null }
   agreed: boolean
@@ -72,6 +70,7 @@ export function emptyForm(account: ApplicantAccount): ApplicationForm {
     professional: { profession: '', designation: '', company: '', address: emptyAddress() },
     otherClubs: [],
     category: '',
+    membership_type_id: '',
     proposer: { name: '', memberId: '' },
     documents: { nidCopy: null, photos: null, tradeLicence: null },
     agreed: false,
@@ -94,22 +93,16 @@ export function formCompletion(f: ApplicationForm): number {
   return Math.round((checks.filter(Boolean).length / checks.length) * 100)
 }
 
-// ─── Storage ─────────────────────────────────────────────────────────────────
+// ─── Storage (local drafts only; proposers come from GET /club-portal/proposers) ─
 const RECORDS_KEY = 'ckcl-applicants'
 const SESSION_KEY = 'ckcl-applicant-session'
 
-// Seeded so the login can be tried without registering first
-export const DEMO_ACCOUNT: ApplicantAccount = {
-  givenName: 'Demo', surname: 'Applicant', email: 'applicant@ckclbd.com', mobile: '01700000000', password: 'Member@123',
-}
-
 function readRecords(): Record<string, ApplicantRecord> {
-  let records: Record<string, ApplicantRecord> = {}
-  try { records = JSON.parse(localStorage.getItem(RECORDS_KEY) || '{}') } catch { /* storage unavailable */ }
-  if (!records[DEMO_ACCOUNT.email]) {
-    records[DEMO_ACCOUNT.email] = { account: DEMO_ACCOUNT, form: emptyForm(DEMO_ACCOUNT), step: 0, status: 'draft' }
+  try {
+    return JSON.parse(localStorage.getItem(RECORDS_KEY) || '{}')
+  } catch {
+    return {}
   }
-  return records
 }
 
 function writeRecords(records: Record<string, ApplicantRecord>) {

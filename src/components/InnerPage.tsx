@@ -10,6 +10,12 @@ import {
   useAbout,
   type AboutBlock,
 } from '../lib/about'
+import {
+  getMembershipPage,
+  isMembershipMenuPage,
+  membershipPageAnchors,
+  useMembership,
+} from '../lib/membership'
 
 // ─── Sibling page definitions ─────────────────────────────────────────────────
 export type PageId =
@@ -433,92 +439,8 @@ function NextPageCard({ page, onNavigate }: { page: { id: PageId; label: string 
   )
 }
 
-// ─── PAGE CONTENT (About pages come from API; membership siblings below) ───────
+// ─── Content from Website Maintenance → About / Membership (block editor) ────
 
-function BenefitsContent() {
-  return (
-    <>
-      <LFP>
-        Membership of Chittagong Khulshi Club Limited opens the door to a range of exclusive benefits, privileges and services designed to enrich the lives of our members and their families every day of the year.
-      </LFP>
-
-      <LFH2>Facilities Access</LFH2>
-      <LFUl items={[
-        'Unrestricted daily access to the Swimming Pool, Coffee Shop and Card Room during operating hours.',
-        'Priority booking for the Convention Hall, Guest House and Salon.',
-        'Preferred rates on all facility bookings compared to guest pricing.',
-        "Access to the club's Wi-Fi network and business lounge areas.",
-      ]} />
-
-      <LFH2>Events & Social Calendar</LFH2>
-      <LFP>Members receive first access and priority seating at all CKCL signature events — including the Annual Gala, Eid Reunion Dinner, Pohela Boishakh celebration, Annual Picnic, and Club Night. A full calendar is published each quarter on the Member Portal.</LFP>
-
-      <LFH2>Family Privileges</LFH2>
-      <LFUl items={[
-        'Spouse and dependent children (under 22) may use club facilities at no additional charge.',
-        'Family membership extensions available for parents and siblings at a reduced annual rate.',
-        "Dedicated family programming including children's events and youth sports activities.",
-      ]} />
-
-      <LFH2>Affiliated Club Access</LFH2>
-      <LFP>CKCL members enjoy reciprocal access to <LFLink href="#">Dhaka Club</LFLink> on production of a valid CKCL Membership Card. This benefit is subject to Dhaka Club's visitor policy, which may vary. CKCL will notify members of any changes to this arrangement.</LFP>
-
-      <LFBlockquote attribution="— Member, since 2014">
-        "The pool alone is worth the membership. But it's the people — the friendships we've built here — that keep us coming back every week."
-      </LFBlockquote>
-
-      <LFH2>Governance Rights</LFH2>
-      <LFUl items={[
-        'Right to vote at the Annual General Meeting.',
-        'Eligibility to stand for election to the Executive Committee (subject to tenure and good-standing requirements).',
-        'Access to Annual Reports and audited financial statements.',
-        'The right to raise matters of concern to the Executive Committee in writing.',
-      ]} />
-
-      <LFCallout>
-        Members are encouraged to bring eligible guests to experience the club before applying. A current member must accompany all guests. Guest visits do not commit the member to a referral.
-      </LFCallout>
-    </>
-  )
-}
-
-function AffiliatedClubsContent() {
-  return (
-    <>
-      <LFP>
-        CKCL maintains an institutional affiliation with Dhaka Club Limited, one of Bangladesh's oldest and most distinguished private members' clubs. This relationship grants qualifying CKCL members reciprocal access to Dhaka Club's facilities when visiting the capital.
-      </LFP>
-
-      <LFImage
-        src="https://images.unsplash.com/photo-1756981168649-0e3c3c8a32f3?w=720&h=400&fit=crop&auto=format"
-        alt="Dhaka Club member lounge"
-        caption="The Dhaka Club member lounge — available to CKCL members on production of a valid membership card."
-      />
-
-      <LFH2>Dhaka Club Limited</LFH2>
-      <LFP>
-        Founded in 1911, Dhaka Club is one of Bangladesh's most storied institutions — a private social club in Shahbagh, Dhaka, with facilities including a swimming pool, restaurants, guest rooms, sports courts and event spaces. CKCL members may access these facilities as visitors subject to Dhaka Club's prevailing visitor policy.
-      </LFP>
-      <LFH3>How to Use Your Reciprocal Privilege</LFH3>
-      <LFOl items={[
-        'Carry your valid, current-year CKCL Membership Card at all times.',
-        'Present your CKCL card at the Dhaka Club reception and request visitor access.',
-        'Sign the visitor register and pay any applicable visitor-day fee directly to Dhaka Club.',
-        "Abide by Dhaka Club's rules and dress code during your visit.",
-      ]} />
-      <LFCallout>
-        Reciprocal access is a privilege, not a right, and is subject to Dhaka Club's discretion and capacity. CKCL will notify members of any changes to this arrangement at least 30 days in advance.
-      </LFCallout>
-
-      <LFH2>Future Affiliations</LFH2>
-      <LFP>
-        The Executive Committee is actively exploring reciprocal arrangements with other clubs in Bangladesh and internationally. Members wishing to recommend an affiliated club are encouraged to write to the Club Secretary.
-      </LFP>
-    </>
-  )
-}
-
-// ─── Content from Website Maintenance → About (block editor) ─────────────────
 
 function listItems(items: unknown[] | undefined): string[] {
   if (!Array.isArray(items)) return []
@@ -634,10 +556,10 @@ function BlockContent({ blocks }: { blocks: AboutBlock[] }) {
   return <div>{out}</div>
 }
 
-function ContentEmpty() {
+function ContentEmpty({ area = 'About' }: { area?: string }) {
   return (
     <p style={{ fontFamily: 'CKCL', fontSize: 16, color: '#5C6673', lineHeight: 1.6 }}>
-      This page has no published content yet. Add it in Website Maintenance → About.
+      This page has no published content yet. Add it in Website Maintenance → {area}.
     </p>
   )
 }
@@ -684,12 +606,12 @@ const PAGE_CONFIG: Record<PageId, PageConfig> = {
   'benefits': {
     title: 'Benefits of Members',
     breadcrumb: ['Home', 'Membership', 'Benefits of Members'],
-    content: BenefitsContent,
+    content: ContentEmpty,
   },
   'affiliated-clubs': {
     title: 'Affiliated Clubs',
     breadcrumb: ['Home', 'Membership', 'Affiliated Clubs'],
-    content: AffiliatedClubsContent,
+    content: ContentEmpty,
   },
 }
 
@@ -702,14 +624,29 @@ export default function InnerPage({
   onNavigate: (id: PageId | 'home') => void
 }) {
   const config = PAGE_CONFIG[pageId]
-  const ContentComponent = config.content
   const next = nextPage(pageId)
   const aboutMenu = isAboutMenuPage(pageId)
-  const { about, fromApi, loading, error } = useAbout()
-  const livePage = aboutMenu ? getAboutPage(about, pageId) : null
+  const membershipMenu = isMembershipMenuPage(pageId)
+  const { about, fromApi: aboutFromApi, loading: aboutLoading, error: aboutError } = useAbout()
+  const { membership, fromApi: membershipFromApi, loading: membershipLoading, error: membershipError } = useMembership()
+  const error = aboutMenu ? aboutError : membershipMenu ? membershipError : null
+
+  const livePage = aboutMenu
+    ? getAboutPage(about, pageId)
+    : membershipMenu
+      ? getMembershipPage(membership, pageId)
+      : null
   const liveBlocks = livePage?.blocks?.filter(Boolean) || []
   const title = (livePage?.title || '').trim() || config.title
-  const anchors = aboutMenu ? (aboutPageAnchors(livePage).length ? aboutPageAnchors(livePage) : undefined) : config.anchors
+  const cmsAnchors = aboutMenu
+    ? aboutPageAnchors(livePage)
+    : membershipMenu
+      ? membershipPageAnchors(livePage)
+      : []
+  const anchors = cmsAnchors.length ? cmsAnchors : config.anchors
+  const fromApi = aboutMenu ? aboutFromApi : membershipMenu ? membershipFromApi : false
+  const loading = aboutMenu ? aboutLoading : membershipMenu ? membershipLoading : false
+  const emptyArea = aboutMenu ? 'About' : 'Membership'
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -720,14 +657,12 @@ export default function InnerPage({
   }
 
   let body: React.ReactNode
-  if (aboutMenu) {
+  if (aboutMenu || membershipMenu) {
     if (loading && !fromApi) body = <ContentLoading />
     else if (fromApi && liveBlocks.length) body = <BlockContent blocks={liveBlocks} />
-    else if (fromApi) body = <ContentEmpty />
-    else body = <ContentEmpty />
+    else body = <ContentEmpty area={emptyArea} />
   } else {
-    // Membership sibling pages — still local until membership CMS is wired.
-    body = <ContentComponent />
+    body = <ContentEmpty />
   }
 
   return (

@@ -14,26 +14,43 @@ function withTrailingSlash(url: string) {
   return url.endsWith('/') ? url : `${url}/`
 }
 
-/** e.g. http://localhost:8000/ → http://localhost:8000/api/ */
-export const backendURL = withTrailingSlash(
-  trimSlash(import.meta.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000') + '/'
-)
-
 /**
- * Prefer LARAVEL_PUBLIC_BACKEND_URL when set (index.php deployments),
- * otherwise NEXT_PUBLIC_BACKEND_URL + api/ — same idea as ERP apps.
+ * Where the API lives, first match wins:
+ *  1. window.__APP_CONFIG__ — /config.js, written from the container's env at start
+ *     (API_URL / PORTAL_DOMAIN in Coolify). Change it there and restart; no rebuild.
+ *  2. Vite env at build/dev time — .env / .env.local (NEXT_PUBLIC_BACKEND_URL, …).
+ *  3. Local fallback: http://localhost:8000/ and the page's own hostname.
  */
-export const baseURL = (() => {
-  const laravel = import.meta.env.LARAVEL_PUBLIC_BACKEND_URL as string | undefined
-  if (laravel && String(laravel).trim()) {
-    // LARAVEL_PUBLIC is often .../index.php/ — API still lives under /api on the host.
-    // Use NEXT_PUBLIC host + /api/ for JSON API (ERP convention).
+const runtimeConfig: AppRuntimeConfig = (typeof window !== 'undefined' && window.__APP_CONFIG__) || {}
+
+function firstSet(...values: (string | undefined | null)[]): string {
+  for (const v of values) {
+    const t = String(v ?? '').trim()
+    if (t) return t
   }
-  return `${backendURL}api/`
-})()
+  return ''
+}
+
+const configuredBackend = firstSet(runtimeConfig.API_URL, import.meta.env.NEXT_PUBLIC_BACKEND_URL)
+
+if (!configuredBackend && typeof window !== 'undefined' && !/^(localhost|127\.|192\.168\.|10\.)/.test(window.location.hostname)) {
+  // A deployed site with no API_URL would call the visitor's own localhost.
+  console.error('API_URL is not configured — set it on the container (see .env.example).')
+}
+
+/** e.g. http://localhost:8000/ → http://localhost:8000/api/ */
+export const backendURL = withTrailingSlash(trimSlash(configuredBackend || 'http://localhost:8000') + '/')
+
+/** JSON API root — `${backendURL}api/` (ERP convention). */
+export const baseURL = `${backendURL}api/`
 
 /** Sent as X-Portal-Domain so club.portal middleware can resolve the club. */
-export const portalDomain = String(import.meta.env.NEXT_PUBLIC_PORTAL_DOMAIN || window.location.hostname || 'localhost')
+export const portalDomain = firstSet(
+  runtimeConfig.PORTAL_DOMAIN,
+  import.meta.env.NEXT_PUBLIC_PORTAL_DOMAIN,
+  typeof window !== 'undefined' ? window.location.hostname : '',
+  'localhost',
+)
 
 export type ClubApiResponse<T> = {
   success?: boolean
@@ -60,15 +77,31 @@ function joinUrl(base: string, path: string) {
   return `${base}${p}`
 }
 
+function readMemberBearer(): string | null {
+  try {
+    const raw = sessionStorage.getItem('ckcl_member_session')
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { token?: string }
+    return parsed?.token ? String(parsed.token) : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Low-level request. `path` is relative to /api/ (e.g. `club-portal/website/home`).
  * Unwraps Club `{ success, data, message }` and returns `data`.
+ * Attaches member Bearer token when a portal session exists.
  */
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'X-Portal-Domain': portalDomain,
     ...(init.headers as Record<string, string> | undefined),
+  }
+  if (!headers.Authorization && !headers.authorization) {
+    const token = readMemberBearer()
+    if (token) headers.Authorization = `Bearer ${token}`
   }
   if (init.body && !(init.body instanceof FormData) && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json'

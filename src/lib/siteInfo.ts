@@ -14,6 +14,9 @@ export type SiteInfo = {
   about_text: string | null
   established_year: string | null
   trade_license: string | null
+  govt_reg_no: string | null
+  /** Shown after a member sends a helpdesk request. */
+  helpdesk_reply_note: string | null
   logo: string | null
   favicon: string | null
   og_image: string | null
@@ -65,6 +68,8 @@ export const EMPTY_SITE: SiteInfo = {
   about_text: null,
   established_year: null,
   trade_license: null,
+  govt_reg_no: null,
+  helpdesk_reply_note: null,
   logo: null,
   favicon: null,
   og_image: null,
@@ -116,6 +121,8 @@ function mapSiteInfo(raw: WebsiteSiteInfoRaw | null | undefined): SiteInfo | nul
     about_text: raw.about_text ?? null,
     established_year: raw.established_year ?? null,
     trade_license: raw.trade_license ?? null,
+    govt_reg_no: raw.govt_reg_no ?? null,
+    helpdesk_reply_note: raw.helpdesk_reply_note ?? null,
     logo: raw.logo ?? null,
     favicon: raw.favicon ?? null,
     og_image: raw.share_image ?? null,

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import Footer from './Footer'
 import SubTabs from './SubTabs'
 import SideNavCard from './SideNav'
+import PersonPortrait from './PersonPortrait'
 import { useAbout } from '../lib/about'
 
 // ─── Member data ──────────────────────────────────────────────────────────────
@@ -13,6 +14,7 @@ type CommitteeMember = {
   designation: string
   company: string
   tier: MemberTier
+  /** API photo URL; empty → initial letter is shown instead. */
   photo: string | null
   bio: string
 }
@@ -22,45 +24,7 @@ type CommitteeMember = {
 type FilterType = 'All' | 'Office Bearers' | 'Members'
 
 // Shown on their own row above the rest of the committee
-const LEADER_ROLES = ['President', 'Vice President']
-
-// ─── No-photo fallback ────────────────────────────────────────────────────────
-function NoPhotoCard() {
-  return (
-    <div
-      className="w-full h-full flex items-center justify-center select-none"
-      style={{ background: '#EEF1F5', position: 'relative' }}
-    >
-      <div
-        style={{
-          fontFamily: 'CKCL',
-          fontWeight: 600,
-          fontSize: 72,
-          color: 'rgba(14,17,22,0.08)',
-          letterSpacing: '-0.02em',
-          userSelect: 'none',
-          lineHeight: 1,
-        }}
-      >
-        CKCL
-      </div>
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 16,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          fontFamily: 'CKCL',
-          fontSize: 11,
-          color: '#A8B0BB',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        Photo not available
-      </div>
-    </div>
-  )
-}
+const LEADER_ROLES = ['President', 'Vice President', 'Founding President', 'Founding Vice President']
 
 // ─── Member card ──────────────────────────────────────────────────────────────
 function MemberCard({
@@ -83,11 +47,11 @@ function MemberCard({
       style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
       aria-label={`View profile of ${member.name}`}
     >
-      {/* Photo container — 4:5 ratio */}
+      {/* Photo container — 4:5 ratio; name sits on the image so empty photos still read clearly */}
       <div
         style={{
           position: 'relative',
-          aspectRatio: '4 / 5',
+          aspectRatio: featured ? '3 / 4' : '4 / 5',
           borderRadius: 20,
           overflow: 'hidden',
           border: hovered ? `${featured ? 2 : 1}px solid #E10B17` : featured ? '2px solid #B98B43' : '1px solid rgba(185,139,67,0.45)',
@@ -98,78 +62,76 @@ function MemberCard({
           transition: 'all 240ms ease-out',
         }}
       >
-        {member.photo ? (
-          <img
-            src={member.photo}
-            alt={member.name}
-            style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top', display: 'block' }}
-          />
-        ) : (
-          <NoPhotoCard />
-        )}
+        <PersonPortrait src={member.photo} name={member.name} />
 
-        {/* Bottom gradient scrim */}
         <div
           style={{
             position: 'absolute',
             inset: 0,
-            background: 'linear-gradient(to top, rgba(14,17,22,0.45) 0%, transparent 50%)',
+            background: 'linear-gradient(to top, rgba(10,13,16,0.92) 0%, rgba(10,13,16,0.55) 32%, transparent 58%)',
             pointerEvents: 'none',
           }}
         />
 
-        {/* Tier chip — bottom-left, glass */}
         <div
-          className="absolute glass-strong eyebrow"
-          style={{
-            bottom: 12,
-            left: 12,
-            fontSize: 9,
-            color: '#B98B43',
-            borderRadius: 999,
-            padding: '4px 10px',
-            letterSpacing: '0.10em',
-          }}
+          className="absolute"
+          style={{ left: 0, right: 0, bottom: 0, padding: featured ? 18 : 14, textAlign: 'left' }}
         >
-          {member.tier === 'Office Bearer' ? 'Office Bearer' : 'Founding Member'}
-        </div>
-      </div>
-
-      {/* Text below */}
-      <div style={{ padding: '14px 4px 0' }}>
-        <div
-          style={{
-            fontFamily: 'CKCL',
-            fontWeight: 700,
-            fontSize: featured ? 18 : 16,
-            lineHeight: 1.3,
-            color: '#0E1116',
-            marginBottom: 3,
-          }}
-        >
-          {member.name}
-        </div>
-        <div
-          style={{
-            fontFamily: 'CKCL',
-            fontWeight: 600,
-            fontSize: featured ? 14 : 13,
-            color: hovered ? '#E10B17' : '#2A3039',
-            marginBottom: 2,
-            transition: 'color 160ms',
-          }}
-        >
-          {member.designation}
-        </div>
-        <div
-          style={{
-            fontFamily: 'CKCL',
-            fontSize: 12,
-            color: '#5C6673',
-            lineHeight: 1.4,
-          }}
-        >
-          {member.company}
+          <div
+            className="eyebrow"
+            style={{
+              display: 'inline-block',
+              fontSize: 9,
+              color: '#E8C584',
+              borderRadius: 999,
+              padding: '3px 9px',
+              letterSpacing: '0.10em',
+              background: 'rgba(14,17,22,0.35)',
+              border: '1px solid rgba(232,197,132,0.35)',
+              marginBottom: 8,
+            }}
+          >
+            {member.tier === 'Office Bearer' ? 'Office Bearer' : member.tier || 'Member'}
+          </div>
+          <div
+            style={{
+              fontFamily: 'CKCL',
+              fontWeight: 700,
+              fontSize: featured ? 18 : 16,
+              lineHeight: 1.25,
+              color: '#FFFFFF',
+              marginBottom: 4,
+            }}
+          >
+            {member.name}
+          </div>
+          <div
+            style={{
+              fontFamily: 'CKCL',
+              fontWeight: 600,
+              fontSize: featured ? 13 : 12,
+              color: hovered ? '#FFD0D3' : 'rgba(255,255,255,0.92)',
+              marginBottom: 2,
+              transition: 'color 160ms',
+            }}
+          >
+            {member.designation}
+          </div>
+          {member.company ? (
+            <div
+              style={{
+                fontFamily: 'CKCL',
+                fontSize: 12,
+                color: 'rgba(255,255,255,0.72)',
+                lineHeight: 1.35,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {member.company}
+            </div>
+          ) : null}
         </div>
       </div>
     </button>
@@ -226,23 +188,14 @@ function MemberModal({
             }}
             className="sm:w-56 sm:aspect-auto sm:min-h-full"
           >
-            {member.photo ? (
-              <img
-                src={member.photo.replace('w=440&h=550', 'w=560&h=720')}
-                alt={member.name}
-                style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top', display: 'block', minHeight: 280 }}
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center" style={{ minHeight: 280 }}>
-                <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 56, color: 'rgba(14,17,22,0.08)' }}>CKCL</div>
-              </div>
-            )}
+            <PersonPortrait src={member.photo} name={member.name} style={{ minHeight: 280 }} />
             {/* Tier chip */}
             <div
               className="absolute bottom-3 left-3 glass-strong eyebrow"
               style={{ fontSize: 9, color: '#B98B43', borderRadius: 999, padding: '4px 10px' }}
             >
-              {member.tier === 'Office Bearer' ? 'Office Bearer' : 'Founding Member'}
+              {/* Same label as the card — the tier set in About → Committee */}
+              {member.tier === 'Office Bearer' ? 'Office Bearer' : member.tier || 'Member'}
             </div>
           </div>
 
@@ -388,7 +341,7 @@ export default function CommitteePage({
 
   const title = COMMITTEES.find((c) => c.id === type)!.label
   const breadcrumb = ['Home', 'About', title]
-  const { about, fromApi, loading } = useAbout()
+  const { about, loading, error } = useAbout()
   const roster = type === 'founding' ? about.founding_committee : about.executive_committee
   const members: CommitteeMember[] = roster.map((m, i) => ({
     id: i + 1,
@@ -414,6 +367,7 @@ export default function CommitteePage({
     'Office Bearers': members.filter((m) => m.tier === 'Office Bearer').length,
     Members: members.filter((m) => m.tier === 'Member').length,
   }
+  const showEmpty = !loading && members.length === 0
 
   return (
     <div style={{ background: '#F7F8FA', minHeight: '100vh' }}>
@@ -445,10 +399,13 @@ export default function CommitteePage({
         </div>
 
         <main style={{ flex: 1, minWidth: 0, padding: 'clamp(40px,6vw,80px) 0' }}>
-      {loading && !fromApi ? (
+      {loading && members.length === 0 ? (
         <p style={{ fontFamily: 'CKCL', fontSize: 15, color: '#5C6673', marginBottom: 24 }}>Loading committee…</p>
       ) : null}
-      {!loading && fromApi && members.length === 0 ? (
+      {!loading && error && members.length === 0 ? (
+        <p style={{ fontFamily: 'CKCL', fontSize: 15, color: '#E10B17', marginBottom: 24 }}>{error}</p>
+      ) : null}
+      {showEmpty && !error ? (
         <p style={{ fontFamily: 'CKCL', fontSize: 15, color: '#5C6673', marginBottom: 24 }}>
           No committee members published yet. Add them in Website Maintenance → About.
         </p>
@@ -534,7 +491,7 @@ export default function CommitteePage({
           ))}
         </div>
 
-        {filtered.length === 0 && (
+        {!loading && members.length > 0 && filtered.length === 0 && (
           <div className="flex flex-col items-center justify-center py-24 gap-3">
             <div style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 22, color: '#A8B0BB' }}>No members found</div>
             <button onClick={() => setFilter('All')} style={{ fontFamily: 'CKCL', fontSize: 14, color: '#E10B17', background: 'none', border: 'none', cursor: 'pointer' }}>Clear filter</button>

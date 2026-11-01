@@ -4,12 +4,20 @@ import Footer from './components/Footer'
 import type { PageId } from './components/InnerPage'
 import type { CommitteePageType } from './components/CommitteePage'
 import type { FacilityId } from './components/FacilitiesPage'
-import { MEMBERS } from './data/members'
 import HomeExtraSections from './components/HomeExtraSections'
 import { mediaUrl } from './lib/api/client'
 import { useApi } from './lib/useApi'
+import { useAbout } from './lib/about'
+import { useDirectoryShowcase } from './lib/directory'
 import { useSiteInfo, type SiteInfo } from './lib/siteInfo'
 import { useHome, parseLink } from './lib/home'
+import { useFacilitiesList } from './lib/facilities'
+import { useAlbums, useNotices, useNewsList, useVideos } from './lib/media'
+import { useMemberSession } from './lib/memberSession'
+import { portalLogout } from './lib/portal'
+import { readRoute, readSearchQuery, syncUrl, type MediaTab as RouteMediaTab, type PortalTab, type RoutedPage } from './lib/routing'
+import SearchOverlay from './components/SearchOverlay'
+import PersonPortrait from './components/PersonPortrait'
 
 // Inner pages are loaded on demand so the home page doesn't ship every page's code
 const InnerPage = lazy(() => import('./components/InnerPage'))
@@ -19,23 +27,13 @@ const MembershipProcessPage = lazy(() => import('./components/MembershipProcessP
 const MemberListPage = lazy(() => import('./components/MemberListPage'))
 const BecomeaMemberPage = lazy(() => import('./components/BecomeaMemberPage'))
 const MediaCentrePage = lazy(() => import('./components/MediaCentrePage'))
-type MediaTab = 'notices' | 'news' | 'gallery' | 'video'
+type MediaTab = RouteMediaTab
 const ResourcesPage = lazy(() => import('./components/ResourcesPage'))
 const ContactPage = lazy(() => import('./components/ContactPage'))
 const SearchPage = lazy(() => import('./components/SearchPage'))
 const NotFoundPage = lazy(() => import('./components/NotFoundPage'))
 const MemberLoginPage = lazy(() => import('./components/MemberLoginPage'))
 const MemberPortalPage = lazy(() => import('./components/MemberPortalPage'))
-
-// Local showcase images (Leadership / directory — not yet on website APIs)
-const IMG = {
-  p1: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=440&h=600&fit=crop&auto=format',
-  p2: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=440&h=600&fit=crop&auto=format',
-  p3: 'https://images.unsplash.com/photo-1652471943570-f3590a4e52ed?w=440&h=600&fit=crop&auto=format',
-  p4: 'https://images.unsplash.com/photo-1685760259914-ee8d2c92d2e0?w=440&h=600&fit=crop&auto=format',
-  p5: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=440&h=600&fit=crop&q=60&auto=format',
-  p6: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=440&h=600&fit=crop&q=60&auto=format',
-}
 
 // Admin text: Enter makes a line break, *word* makes it bold
 function Lines({ text }: { text: string }) {
@@ -505,31 +503,23 @@ function FacilityCard({ tile, onSelect }: { tile: FacilityTile; onSelect?: (id: 
   )
 }
 
-type ApiFacilityCard = {
-  id: string
-  slug?: string | null
-  name: string
-  caption?: string | null
-  availability?: string | null
-  avail?: string | null
-  image?: string | null
-  grid_area?: string | null
-}
 function Facilities({ onSelectFacility }: { onSelectFacility?: (id: string) => void }) {
   const f = useHome().home.facilities
-  // API facilities only — no hard-coded bento tiles when the list is empty / failed.
-  const live = useApi<{ facilities: ApiFacilityCard[] }>('club-portal/website/facilities').data?.facilities?.slice(0, BENTO_AREAS.length)
-  const tiles: FacilityTile[] = (live ?? []).map((x, i) => ({
+  const linkProps = useLinkProps()
+  // Same Facilities page API as /facilities — heading copy from Home CMS.
+  const { facilities: live } = useFacilitiesList()
+  const tiles: FacilityTile[] = live.slice(0, BENTO_AREAS.length).map((x, i) => ({
     id: String(x.slug || x.id),
     name: x.name,
     caption: x.caption ?? '',
-    avail: x.availability ?? x.avail ?? '',
-    img: mediaUrl(x.image) || '',
+    avail: x.avail ?? '',
+    img: x.img || '',
     alt: x.name,
-    gridArea: (x.grid_area && BENTO_AREAS.includes(x.grid_area as typeof BENTO_AREAS[number]) ? x.grid_area : null) || BENTO_AREAS[i] || `f${i}`,
+    gridArea: (x.gridArea && BENTO_AREAS.includes(x.gridArea as typeof BENTO_AREAS[number]) ? x.gridArea : null) || BENTO_AREAS[i] || `f${i}`,
   }))
   // The bento needs all eight tiles; with fewer, fall back to an even grid
   const bento = tiles.length === BENTO_AREAS.length
+  if (!f.enabled) return null
   if (!tiles.length && !f.heading && !f.text) return null
   return (
     <section id="facilities" className="section-pad" style={{ background: HOME_BG_ALT }}>
@@ -542,11 +532,21 @@ function Facilities({ onSelectFacility }: { onSelectFacility?: (id: string) => v
                 <Lines text={f.heading}/>
               </h2>
             ) : null}
-            {f.text && (
-              <p style={{ fontFamily: 'CKCL', fontSize: 15, lineHeight: 1.6, color: '#5C6673', maxWidth: 340, margin: 0 }}>
-                {f.text}
-              </p>
-            )}
+            <div className="flex flex-col items-start gap-4" style={{ maxWidth: 340 }}>
+              {f.text && (
+                <p style={{ fontFamily: 'CKCL', fontSize: 15, lineHeight: 1.6, color: '#5C6673', margin: 0 }}>
+                  {f.text}
+                </p>
+              )}
+              {(f.button_label || f.button_link) && (
+                <a
+                  {...linkProps(f.button_link || 'page:facilities')}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'CKCL', fontSize: 14, fontWeight: 600, color: '#E10B17', textDecoration: 'none' }}
+                >
+                  {f.button_label || 'View all facilities'} →
+                </a>
+              )}
+            </div>
           </div>
         </div>
 
@@ -617,71 +617,70 @@ function Facilities({ onSelectFacility }: { onSelectFacility?: (id: string) => v
   )
 }
 
-// ─── SECTION 4 — Notices & News ───────────────────────────────────────────────
-// Live from the CKCL backend (/api/media/*); the latest few of each show here.
-type HomeNotice = { id: number; date: string; year: string; title: string; bangla: boolean; fileType: string | null; file_url: string | null }
-type HomeArticle = { id: number; slug: string; title: string; date: string; category: string }
-type HomeVideo = { id: number; title: string; description: string | null; thumb: string | null }
+// ─── Highlights strip (Home CMS → highlights.items) ───────────────────────────
+function Highlights() {
+  const h = useHome().home.highlights
+  if (!h.enabled || !h.items.length) return null
+  return (
+    <section id="highlights" className="section-pad" style={{ background: '#FFFFFF' }}>
+      <div style={{ maxWidth: HOME_W, margin: '0 auto', padding: '0 clamp(24px,5vw,80px)' }}>
+        {(h.eyebrow || h.heading || h.text) && (
+          <div className="mb-10 lg:mb-12" style={{ maxWidth: 640 }}>
+            {h.eyebrow && <div className="eyebrow mb-3" style={{ color: '#B98B43' }}>{h.eyebrow}</div>}
+            {h.heading && (
+              <h2 style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 'clamp(26px,2.8vw,40px)', color: '#0E1116', lineHeight: 1.15, letterSpacing: '-0.015em', margin: '0 0 12px' }}>
+                <Lines text={h.heading} />
+              </h2>
+            )}
+            {h.text && <p style={{ fontFamily: 'CKCL', fontSize: 15, lineHeight: 1.65, color: '#5C6673', margin: 0 }}>{h.text}</p>}
+          </div>
+        )}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+          {h.items.map((item, i) => (
+            <div
+              key={`${item.label}-${i}`}
+              style={{
+                padding: 'clamp(18px,2vw,28px)',
+                borderRadius: 20,
+                background: HOME_BG_ALT,
+                border: '1px solid #E2E6EC',
+              }}
+            >
+              <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 'clamp(28px,3vw,40px)', color: '#E10B17', letterSpacing: '-0.02em', lineHeight: 1 }}>
+                {item.value}
+              </div>
+              <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: '#0E1116', marginTop: 10 }}>{item.label}</div>
+              {item.note && <div style={{ fontFamily: 'CKCL', fontSize: 12, color: '#5C6673', marginTop: 4, lineHeight: 1.45 }}>{item.note}</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
 
+// ─── SECTION 4 — Notices & News (same Media Centre APIs as /media) ────────────
 type NewsTab = 'notices' | 'news'
 
 function NoticesNews({ onOpenMedia }: { onOpenMedia: (tab: MediaTab) => void }) {
   const [hoveredRow, setHoveredRow] = useState<number | null>(null)
   const [tab, setTab] = useState<NewsTab>('notices')
-  type ApiNotice = { id: string | number; title?: string; notice_date?: string | null; attachment?: string | null }
-  type ApiNews = { id: string | number; slug?: string | null; title?: string; event_date?: string | null; category?: string | null; featured?: boolean }
-  type ApiVideo = { id: string | number; title?: string; description?: string | null; thumb_image?: string | null }
 
-  const noticesPage = useApi<{ data?: ApiNotice[] }>('club-portal/website/media/notices')
-  const notices: HomeNotice[] = (noticesPage.data?.data ?? []).slice(0, 6).map((n) => {
-    const d = n.notice_date ? new Date(n.notice_date) : null
-    const date =
-      d && !Number.isNaN(d.getTime())
-        ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
-        : ''
-    const year = d && !Number.isNaN(d.getTime()) ? String(d.getFullYear()) : ''
-    return {
-      id: Number(n.id) || 0,
-      date,
-      year,
-      title: n.title || '',
-      bangla: false,
-      fileType: n.attachment ? 'PDF' : null,
-      file_url: n.attachment || null,
-    }
-  })
-  const newsPage = useApi<{ data?: ApiNews[] }>('club-portal/website/media/news')
-  const newsList: HomeArticle[] = (newsPage.data?.data ?? []).map((a) => ({
-    id: Number(a.id) || 0,
-    slug: a.slug || String(a.id),
-    title: a.title || '',
-    date: a.event_date || '',
-    category: a.category || '',
-  }))
-  const featuredRaw = (newsPage.data?.data ?? []).find((a) => a.featured)
-  const newsData = {
-    featured: featuredRaw
-      ? newsList.find((a) => String(a.id) === String(Number(featuredRaw.id) || featuredRaw.id)) ?? newsList[0] ?? null
-      : newsList[0] ?? null,
-    articles: newsList,
-  }
-  const NEWS_ITEMS = newsData
-    ? [newsData.featured, ...newsData.articles].filter((a): a is HomeArticle => !!a).slice(0, 2)
-    : []
-  const videoRaw = useApi<{ data?: ApiVideo[] }>('club-portal/website/media/videos').data?.data?.[0]
-  const video: HomeVideo | undefined = videoRaw
-    ? {
-        id: Number(videoRaw.id) || 0,
-        title: videoRaw.title || '',
-        description: videoRaw.description ?? null,
-        thumb: mediaUrl(videoRaw.thumb_image) || null,
-      }
-    : undefined
-  const NOTICES = notices.map((n) => ({
+  const { data: noticesData } = useNotices()
+  const { data: newsData } = useNewsList()
+  const { data: videosData } = useVideos()
+
+  const NOTICES = (noticesData?.notices ?? []).slice(0, 6).map((n) => ({
     ...n,
     day: n.date.split(' ')[0] || '',
     month: (n.date.split(' ')[1] ?? '').toUpperCase(),
   }))
+  const featured = newsData?.featured ?? null
+  const NEWS_ITEMS = featured
+    ? [featured, ...(newsData?.articles ?? []).filter((a) => a.slug !== featured.slug)].slice(0, 2)
+    : (newsData?.articles ?? []).slice(0, 2)
+  const video = videosData?.videos?.[0]
+
   const viewAll = (t: MediaTab) => (e: React.MouseEvent) => { e.preventDefault(); onOpenMedia(t) }
 
   // On mobile only the active tab's panel shows; from lg both sit side by side
@@ -866,34 +865,13 @@ function NoticesNews({ onOpenMedia }: { onOpenMedia: (tab: MediaTab) => void }) 
   )
 }
 
-// ─── SECTION 5 — Leadership ────────────────────────────────────────────────────
-const COMMITTEE = [
-  { name: 'Md. Rafiqul Islam', role: 'President', company: 'Islam Group of Industries', img: IMG.p1 },
-  { name: 'Nasreen Akter', role: 'Vice President', company: 'Akter Enterprises Ltd.', img: IMG.p2 },
-  { name: 'Kamal Hossain', role: 'General Secretary', company: 'KH Holdings', img: IMG.p3 },
-  { name: 'Dilruba Sultana', role: 'Joint Secretary', company: 'Sultana Textiles', img: IMG.p4 },
-  { name: 'Abdullah Al Mamun', role: 'Treasurer', company: 'Mamun Shipping Ltd.', img: IMG.p5 },
-  { name: 'Shirin Akhter', role: 'Executive Member', company: 'Akhter Real Estate', img: IMG.p6 },
-  { name: 'Tarik Ahmed', role: 'Executive Member', company: 'Ahmed Steel Mills', img: IMG.p1 },
-]
-
 // Card data shared by the committee and member-directory showcases
-type ShowcasePerson = { name: string; role: string; company: string; img: string }
-
-// Homepage member directory: members with photos, larger crop for portrait cards
-const DIRECTORY: ShowcasePerson[] = MEMBERS
-  .filter((m) => m.avatar)
-  .map((m) => ({
-    name: m.name,
-    role: m.tier,
-    company: `${m.designation}, ${m.company}`,
-    img: m.avatar!.replace('w=144&h=144', 'w=440&h=600'),
-  }))
+type ShowcasePerson = { name: string; role: string; company: string; img: string | null }
 
 function CommitteeCardContent({ m, compact }: { m: ShowcasePerson; compact?: boolean }) {
   return (
     <>
-      <img src={m.img} alt={m.name} className="w-full h-full object-cover object-top" style={{ display: 'block' }}/>
+      <PersonPortrait src={m.img} name={m.name} />
       <div className="absolute inset-0" style={{ background: 'linear-gradient(to top, rgba(10,13,16,0.92) 0%, rgba(10,13,16,0.55) 30%, transparent 58%)' }}/>
       <div className="absolute bottom-0 left-0 right-0" style={{ padding: compact ? 14 : 18 }}>
         <div className="eyebrow" style={{ display: 'inline-block', fontSize: compact ? 9 : 10, fontWeight: 600, color: '#E8C584', marginBottom: compact ? 6 : 8 }}>{m.role}</div>
@@ -1152,15 +1130,15 @@ function PeopleShowcase({
 
       {/* Header — constrained */}
       <div style={{ maxWidth: HOME_W, margin: '0 auto', padding: '0 clamp(24px,5vw,80px)', marginBottom: 48 }}>
-        <div className="eyebrow mb-3" style={{ color: '#B98B43' }}>{eyebrow}</div>
+        {eyebrow && <div className="eyebrow mb-3" style={{ color: '#B98B43' }}>{eyebrow}</div>}
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
           <div>
             <h2 style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 'clamp(26px,2.8vw,40px)', color: '#0E1116', lineHeight: 1.15, letterSpacing: '-0.015em', margin: '0 0 12px' }}>
               {title}
             </h2>
-            <p style={{ fontFamily: 'CKCL', fontSize: 15, lineHeight: 1.6, color: '#5C6673', maxWidth: 440, margin: 0 }}>
+            {description && <p style={{ fontFamily: 'CKCL', fontSize: 15, lineHeight: 1.6, color: '#5C6673', maxWidth: 440, margin: 0 }}>
               {description}
-            </p>
+            </p>}
           </div>
           <a
             href="#"
@@ -1187,32 +1165,58 @@ function PeopleShowcase({
   )
 }
 
-function Leadership() {
+function Leadership({ onViewCommittee }: { onViewCommittee?: () => void }) {
+  // Heading copy: Website Maintenance → Home → Committee. People: About → Committee.
+  const h = useHome().home.committee
+  const { about, loading } = useAbout()
+  const roster = (about.executive_committee?.length ? about.executive_committee : about.founding_committee) || []
+  const people: ShowcasePerson[] = roster.map((m) => ({
+    name: m.name,
+    role: m.designation || m.tier || 'Committee',
+    company: m.company || '',
+    img: m.photo || null,
+  }))
+  if (!h.enabled) return null
+  if (!loading && people.length === 0) return null
+  if (loading && people.length === 0) return null
   return (
     <PeopleShowcase
       id="governance"
       background="#FFFFFF"
-      eyebrow="GOVERNANCE"
-      title={<>Founding Executive<br/>Committee.</>}
-      description="The members who shaped CKCL from its first meeting in 2013 and continue to guide the club today."
-      linkLabel="View full committee"
-      people={COMMITTEE}
+      eyebrow={h.eyebrow}
+      title={<Lines text={h.heading || 'Committee'}/>}
+      description={h.text}
+      linkLabel={h.button_label || 'View full committee'}
+      onLink={onViewCommittee}
+      people={people}
     />
   )
 }
 
 // ─── SECTION 5b — Member Directory ────────────────────────────────────────────
 function MemberDirectory({ onViewAll }: { onViewAll: () => void }) {
+  // Heading copy: Website Maintenance → Home → Member Directory.
+  const h = useHome().home.directory
+  const { people: rows, loading } = useDirectoryShowcase(12)
+  const people: ShowcasePerson[] = rows.map((m) => ({
+    name: m.full_name,
+    role: m.membership_type || 'Member',
+    company: [m.designation, m.company].filter(Boolean).join(', '),
+    img: m.photo_url || null,
+  }))
+  if (!h.enabled) return null
+  if (loading && people.length === 0) return null
+  if (!loading && people.length === 0) return null
   return (
     <PeopleShowcase
       id="members"
       background="#FFFFFF"
-      eyebrow="MEMBERSHIP"
-      title={<>Member<br/>Directory.</>}
-      description="Business leaders, professionals and families who make up the Khulshi Club community."
-      linkLabel="View all members"
+      eyebrow={h.eyebrow}
+      title={<Lines text={h.heading || 'Member Directory'}/>}
+      description={h.text}
+      linkLabel={h.button_label || 'View all members'}
       onLink={onViewAll}
-      people={DIRECTORY}
+      people={people}
       reverse
     />
   )
@@ -1405,17 +1409,17 @@ const ALBUM_SPANS = [
 function Gallery({ onOpenMedia }: { onOpenMedia: (tab: MediaTab) => void }) {
   const g = useHome().home.gallery
   const linkProps = useLinkProps()
-  // First eight albums in the order set in the admin (Media → Photo Gallery)
-  type ApiAlbum = { id: string | number; name?: string; photos_count?: number; cover_image?: string | null }
-  const ALBUMS: HomeAlbum[] = (useApi<{ data?: ApiAlbum[] }>('club-portal/website/media/albums').data?.data ?? [])
-    .slice(0, 8)
-    .map((a) => ({
-      id: Number(a.id) || 0,
-      name: a.name || '',
-      count: a.photos_count ?? 0,
-      cover: mediaUrl(a.cover_image) || null,
-    }))
+  // Same Photo Gallery API as Media Centre → Gallery tab
+  const { data: albumsData } = useAlbums()
+  const ALBUMS: HomeAlbum[] = (albumsData?.albums ?? []).slice(0, 8).map((a) => ({
+    id: a.id,
+    name: a.name,
+    count: a.count,
+    cover: a.cover,
+  }))
   const open = (e: React.MouseEvent) => { e.preventDefault(); onOpenMedia('gallery') }
+  if (!g.enabled) return null
+  if (!ALBUMS.length && !g.heading) return null
   if (!ALBUMS.length) return null
 
   return (
@@ -1651,34 +1655,118 @@ function useDocumentHead(site: SiteInfo) {
     meta('property', 'og:title', site.seo.title || site.club_name)
     meta('property', 'og:description', site.seo.description)
     meta('property', 'og:image', site.og_image)
+    // Home-screen name on iOS (was a fixed "CKCL" in index.html)
+    meta('name', 'apple-mobile-web-app-title', site.short_name || site.club_name || null)
     if (site.favicon) {
       document.head.querySelectorAll<HTMLLinkElement>('link[rel~="icon"]').forEach((l) => { l.href = site.favicon as string })
     }
   }, [site])
+
+  // Install / home-screen manifest — only rebuilt when the name or icon changes.
+  const clubName = site.club_name
+  const shortName = site.short_name
+  const favicon = site.favicon
+  useEffect(() => {
+    const manifestLink = document.head.querySelector<HTMLLinkElement>('link[rel="manifest"]')
+    if (!manifestLink || !clubName) return
+    const manifest = {
+      name: clubName,
+      short_name: shortName || clubName,
+      start_url: window.location.origin + '/',
+      icons: favicon
+        ? [{ src: favicon, sizes: 'any', purpose: 'any' }]
+        : [
+            { src: `${window.location.origin}/favicon/web-app-manifest-192x192.png`, sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+            { src: `${window.location.origin}/favicon/web-app-manifest-512x512.png`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          ],
+      theme_color: '#ffffff',
+      background_color: '#ffffff',
+      display: 'standalone',
+    }
+    const url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' }))
+    const previous = manifestLink.href
+    manifestLink.href = url
+    return () => {
+      manifestLink.href = previous
+      URL.revokeObjectURL(url)
+    }
+  }, [clubName, shortName, favicon])
 }
 
 function AppRoutes() {
   useDocumentHead(useSiteInfo())
-  const [page, setPage] = useState<AppPage>('home')
-  const [mediaTab, setMediaTab] = useState<MediaTab>('notices')
-  const [loggedInMemberNo, setLoggedInMemberNo] = useState<string | null>(null)
+  const initial = readRoute()
+  const [page, setPage] = useState<AppPage>(initial.page as AppPage)
+  const [mediaTab, setMediaTab] = useState<MediaTab>(initial.mediaTab)
+  const [portalPage, setPortalPage] = useState<PortalTab>(initial.portalPage)
+  const [searchQuery, setSearchQuery] = useState(() => readSearchQuery())
+  const [searchOpen, setSearchOpen] = useState(false)
+  const { memberNo: loggedInMemberNo, signOut: clearLoggedInMember } = useMemberSession()
 
-  const navigate = (id: PageId | 'home' | `committee:${CommitteePageType}` | 'facilities' | `facility:${FacilityId}` | 'membership-process' | 'member-list' | 'become-member' | 'media' | 'resources' | 'contact' | 'search' | '404' | 'member-login' | 'member-portal') => {
-    if (id === 'media') setMediaTab('notices')
-    setPage(id as AppPage)
+  const go = (
+    id: AppPage,
+    tab: MediaTab = 'notices',
+    mode: 'push' | 'replace' = 'push',
+    portal: PortalTab = 'dashboard',
+    q?: string,
+  ) => {
+    const nextTab = id === 'media' ? tab : mediaTab
+    const nextPortal = id === 'member-portal' ? portal : 'dashboard'
+    const nextQ = id === 'search' ? (q ?? searchQuery) : ''
+    setPage(id)
+    if (id === 'media') setMediaTab(tab)
+    if (id === 'member-portal') setPortalPage(nextPortal)
+    if (id === 'search') setSearchQuery(nextQ)
+    syncUrl(id as RoutedPage, id === 'media' ? tab : nextTab, mode, nextPortal, nextQ)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  const navigate = (id: PageId | 'home' | `committee:${CommitteePageType}` | 'facilities' | `facility:${FacilityId}` | 'membership-process' | 'member-list' | 'become-member' | 'media' | 'resources' | 'contact' | 'search' | '404' | 'member-login' | 'member-portal') => {
+    if (id === 'search') {
+      setSearchOpen(true)
+      return
+    }
+    go(id as AppPage, id === 'media' ? 'notices' : mediaTab)
+  }
+
+  const openSearchOverlay = () => setSearchOpen(true)
+  const runSearch = (q: string) => {
+    setSearchOpen(false)
+    go('search', 'notices', 'push', 'dashboard', q)
+  }
+
+  const nav = (extra?: { currentPage?: string }) => (
+    <Navbar
+      onInnerNavigate={navigate}
+      currentPage={extra?.currentPage ?? page}
+      onOpenSearch={openSearchOverlay}
+    />
+  )
+
   const openMedia = (tab: MediaTab) => {
-    setMediaTab(tab)
-    setPage('media')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    go('media', tab)
   }
 
   const navigateApp = (id: AppPage) => {
-    setPage(id)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    go(id, id === 'media' ? mediaTab : 'notices')
   }
+
+  // Browser back / forward + deep links
+  useEffect(() => {
+    const onPop = () => {
+      const route = readRoute()
+      setPage(route.page as AppPage)
+      setMediaTab(route.mediaTab)
+      setPortalPage(route.portalPage)
+      setSearchQuery(readSearchQuery())
+      window.scrollTo({ top: 0, behavior: 'auto' })
+    }
+    window.addEventListener('popstate', onPop)
+    // Normalize URL on first paint (e.g. `/home` → `/`, `/portal/dashboard` → `/portal`)
+    syncUrl(initial.page, initial.mediaTab, 'replace', initial.portalPage, readSearchQuery())
+    return () => window.removeEventListener('popstate', onPop)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Follow a button link set in Admin → Home
   const followLink = (link: string) => {
@@ -1686,36 +1774,76 @@ function AppRoutes() {
     if (!t) return
     if (t.kind === 'page') navigateApp(t.id as AppPage)
     else if (t.kind === 'media') openMedia(t.id as MediaTab)
-    else if (t.kind === 'section') document.getElementById(t.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    else if (t.kind === 'url') {
+    else if (t.kind === 'section') {
+      if (page !== 'home') {
+        go('home', 'notices', 'push')
+        window.setTimeout(() => document.getElementById(t.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80)
+      } else {
+        document.getElementById(t.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    } else if (t.kind === 'url') {
       if (t.external) window.open(t.href, '_blank', 'noopener,noreferrer')
       else window.location.href = t.href
     }
   }
 
+  const searchChrome = (
+    <SearchOverlay
+      open={searchOpen}
+      onClose={() => setSearchOpen(false)}
+      onSearch={runSearch}
+      initialQuery={searchQuery}
+    />
+  )
+
   if (page === 'member-login') {
     return (
-      <MemberLoginPage
-        onLogin={(memberNo) => { setLoggedInMemberNo(memberNo); setPage('member-portal') }}
-        onNavigate={(p) => navigate(p as AppPage)}
-      />
+      <>
+        {searchChrome}
+        <MemberLoginPage
+          onLogin={() => go('member-portal', 'notices', 'replace', portalPage || 'dashboard')}
+          onNavigate={(p) => navigate(p as AppPage)}
+        />
+      </>
     )
   }
 
-  if (page === 'member-portal' && loggedInMemberNo) {
+  if (page === 'member-portal') {
+    if (!loggedInMemberNo) {
+      // Deep link /portal without a session → login (return to same portal section after sign-in)
+      return (
+        <>
+          {searchChrome}
+          <MemberLoginPage
+            onLogin={() => go('member-portal', 'notices', 'replace', portalPage)}
+            onNavigate={(p) => navigate(p as AppPage)}
+          />
+        </>
+      )
+    }
     return (
-      <MemberPortalPage
-        memberNo={loggedInMemberNo}
-        onLogout={() => { setLoggedInMemberNo(null); setPage('home') }}
-        onNavigate={(p) => navigate(p as AppPage)}
-      />
+      <>
+        {searchChrome}
+        <MemberPortalPage
+          memberNo={loggedInMemberNo}
+          activePage={portalPage}
+          onPortalNavigate={(p) => go('member-portal', 'notices', 'push', p)}
+          onLogout={async () => {
+            await portalLogout()
+            clearLoggedInMember()
+            go('home')
+          }}
+          onNavigate={(p) => navigate(p as AppPage)}
+        />
+      </>
     )
   }
 
   if (page === 'contact') {
     return (
       <>
-        <Navbar onInnerNavigate={navigate} currentPage={page} />
+        {nav()}
+        {searchChrome}
         <ContactPage />
       </>
     )
@@ -1724,20 +1852,31 @@ function AppRoutes() {
   if (page === 'search') {
     return (
       <>
-        <Navbar onInnerNavigate={navigate} currentPage={page} />
-        <SearchPage />
+        {nav()}
+        {searchChrome}
+        <SearchPage
+          initialQuery={searchQuery}
+          onNavigate={(p) => navigate(p as AppPage)}
+          onOpenSearch={openSearchOverlay}
+        />
       </>
     )
   }
 
   if (page === '404') {
-    return <NotFoundPage onNavigate={(p) => navigate(p as AppPage)} />
+    return (
+      <>
+        {searchChrome}
+        <NotFoundPage onNavigate={(p) => navigate(p as AppPage)} />
+      </>
+    )
   }
 
   if (page === 'resources') {
     return (
       <>
-        <Navbar onInnerNavigate={navigate} currentPage={page} />
+        {nav()}
+        {searchChrome}
         <ResourcesPage />
       </>
     )
@@ -1746,7 +1885,8 @@ function AppRoutes() {
   if (page === 'media') {
     return (
       <>
-        <Navbar onInnerNavigate={navigate} currentPage={page} />
+        {nav()}
+        {searchChrome}
         <MediaCentrePage key={mediaTab} initialTab={mediaTab} />
       </>
     )
@@ -1755,8 +1895,9 @@ function AppRoutes() {
   if (page === 'become-member') {
     return (
       <>
-        <Navbar onInnerNavigate={navigate} currentPage={page} />
-        <BecomeaMemberPage onHome={() => navigateApp('home')} />
+        {nav()}
+        {searchChrome}
+        <BecomeaMemberPage onHome={() => go('home')} />
       </>
     )
   }
@@ -1764,7 +1905,8 @@ function AppRoutes() {
   if (page === 'member-list') {
     return (
       <>
-        <Navbar onInnerNavigate={navigate} currentPage={page} />
+        {nav()}
+        {searchChrome}
         <MemberListPage />
       </>
     )
@@ -1773,8 +1915,9 @@ function AppRoutes() {
   if (page === 'membership-process') {
     return (
       <>
-        <Navbar onInnerNavigate={navigate} currentPage={page} />
-        <MembershipProcessPage onApply={() => navigateApp('become-member')} />
+        {nav()}
+        {searchChrome}
+        <MembershipProcessPage onApply={() => go('become-member')} />
       </>
     )
   }
@@ -1783,8 +1926,14 @@ function AppRoutes() {
     const facilityId = page.startsWith('facility:') ? (page.replace('facility:', '') as FacilityId) : undefined
     return (
       <>
-        <Navbar onInnerNavigate={navigate} currentPage={page} />
-        <FacilitiesPage initialFacility={facilityId} onBack={() => navigateApp('home')} />
+        {nav()}
+        {searchChrome}
+        <FacilitiesPage
+          initialFacility={facilityId}
+          onBack={() => go('facilities')}
+          onSelectFacility={(id) => go(`facility:${id}` as AppPage)}
+          onSignIn={() => go('member-login')}
+        />
       </>
     )
   }
@@ -1793,8 +1942,9 @@ function AppRoutes() {
     const type = page.split(':')[1] as CommitteePageType
     return (
       <>
-        <Navbar onInnerNavigate={navigate} currentPage={page} />
-        <CommitteePage type={type} onNavigate={(t) => navigateApp(`committee:${t}`)} />
+        {nav()}
+        {searchChrome}
+        <CommitteePage type={type} onNavigate={(t) => go(`committee:${t}`)} />
       </>
     )
   }
@@ -1802,7 +1952,8 @@ function AppRoutes() {
   if (page !== 'home') {
     return (
       <>
-        <Navbar onInnerNavigate={navigate} currentPage={page} />
+        {nav()}
+        {searchChrome}
         <InnerPage pageId={page as PageId} onNavigate={navigate} />
       </>
     )
@@ -1811,12 +1962,14 @@ function AppRoutes() {
   return (
     <FollowLink.Provider value={followLink}>
     <div style={{ fontFamily: 'CKCL', background: 'rgb(10, 13, 16)' }}>
-      <Navbar onInnerNavigate={navigate} currentPage={page} />
+      {nav()}
+        {searchChrome}
       <Hero />
-      <Leadership />
+      <Leadership onViewCommittee={() => go('committee:executive')} />
       <NoticesNews onOpenMedia={openMedia} />
-      <MemberDirectory onViewAll={() => navigateApp('member-list')} />
-      <Facilities onSelectFacility={(id) => navigateApp(`facility:${id}` as AppPage)} />
+      <MemberDirectory onViewAll={() => go('member-list')} />
+      <Facilities onSelectFacility={(id) => go(`facility:${id}` as AppPage)} />
+      <Highlights />
       <Gallery onOpenMedia={openMedia} />
       <About />
       <MembershipCTA />

@@ -1,7 +1,35 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import logoImg from '@/imports/logo-1.png'
+import { ApiError, mediaUrl } from '../lib/api/client'
+import type { MemberProfile } from '../lib/memberSession'
+import {
+  changePortalPassword,
+  createPortalHelpdeskTicket,
+  downloadPortalStatementPdf,
+  fetchPortalStatement,
+  replyPortalHelpdeskTicket,
+  submitPortalChangeRequest,
+  usePortalBankAccounts,
+  usePortalChangeRequests,
+  usePortalDashboard,
+  usePortalHelpdesk,
+  usePortalInvoices,
+  usePortalMe,
+  usePortalNotifications,
+  usePortalPayments,
+  markAllPortalNotificationsRead,
+  markPortalNotificationRead,
+  type PortalDashboard,
+  type PortalHelpdeskTicket,
+  type PortalInvoice,
+  type PortalNotification,
+  type PortalPayment,
+} from '../lib/portal'
 import { useSiteInfo } from '../lib/siteInfo'
+import ClubLogo from './ClubLogo'
+import PersonPortrait from './PersonPortrait'
+import { useNewsList, useNotices } from '../lib/media'
+import { useWebsiteOffers } from '../lib/offers'
 
 function useCopy() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
@@ -45,31 +73,88 @@ const T = {
 type PortalPage = 'dashboard' | 'membership-card' | 'personal-info' | 'account-statement' | 'payment-history' | 'invoices' | 'bank-accounts' | 'change-request' | 'helpdesk' | 'change-password' | 'services'
 
 type Member = {
-  name: string; memberNo: string; tier: 'Founding Member' | 'Life Member' | 'General Member'
-  status: 'Active' | 'Suspended' | 'Expired'; photo: string; email: string; phone: string
+  name: string; memberNo: string; tier: string
+  /** Membership-type card colour from the API (hex) — null = default dark card. */
+  tierColor: string | null
+  status: 'Active' | 'Suspended' | 'Expired'
+  /** API photo; null → the name's initial is shown instead of a photo. */
+  photo: string | null; email: string; phone: string
   joinDate: string; outstanding: number
+  bloodGroup?: string
+  profession?: string
+  company?: string
+  designation?: string
+  dob?: string
+  nid?: string
+  address?: string
+  spouse?: string
+  nominee?: string
+  joinedRaw?: string | null
 }
 
-const MOCK_MEMBER: Member = {
-  name: 'Md. Rafiqul Islam', memberNo: 'FM0001', tier: 'Founding Member',
-  status: 'Active', photo: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=160&h=160&fit=crop&auto=format',
-  email: 'rafiqul@islamgroup.com', phone: '+880 1711 000 001',
-  joinDate: 'March 2013', outstanding: 12500,
+
+function mapPortalStatus(status?: string | null): Member['status'] {
+  const s = String(status || '').toLowerCase()
+  if (s === 'suspended') return 'Suspended'
+  if (s === 'approved' || s === 'active') return 'Active'
+  return 'Expired'
 }
 
-const DUES = [
-  { month: 'July 2026', type: 'Monthly subscription', amount: 2500, status: 'Overdue' as const, due: '01 Jul 2026' },
-  { month: 'June 2026', type: 'Monthly subscription', amount: 2500, status: 'Overdue' as const, due: '01 Jun 2026' },
-  { month: 'August 2026', type: 'Monthly subscription', amount: 2500, status: 'Upcoming' as const, due: '01 Aug 2026' },
-  { month: 'May 2026', type: 'Monthly subscription', amount: 2500, status: 'Paid' as const, due: '01 May 2026' },
-  { month: 'April 2026', type: 'Monthly subscription', amount: 2500, status: 'Paid' as const, due: '01 Apr 2026' },
-]
+function formatJoinDate(raw?: string | null) {
+  if (!raw) return '—'
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return raw
+  return d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+}
 
-const UPDATES = [
-  { date: '03 Jul', title: '2nd Convener Committee Meeting — Agenda Notice', tag: 'Notice' },
-  { date: '09 Jun', title: 'Annual Picnic 2026 — Registration now open', tag: 'Event' },
-  { date: '19 May', title: 'Club Night 2026 — A Night to Remember', tag: 'News' },
-]
+function prettyDay(raw?: string | null) {
+  if (!raw) return '—'
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return String(raw).slice(0, 10)
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+}
+
+function shortNoticeDate(raw?: string | null) {
+  if (!raw) return '—'
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+}
+
+function mapMemberFromApi(profile: MemberProfile | null | undefined, outstanding = 0, memberNoFallback = ''): Member {
+  const nominees = Array.isArray(profile?.nominees) ? profile!.nominees as { name?: string; relation?: string }[] : []
+  const nominee = nominees[0]
+    ? `${nominees[0].name || ''}${nominees[0].relation ? ` (${nominees[0].relation})` : ''}`.trim()
+    : ''
+  return {
+    name: profile?.full_name || 'Member',
+    memberNo: String(profile?.member_no || memberNoFallback || '').toUpperCase(),
+    tier: profile?.membership_type || 'Member',
+    tierColor: profile?.membership_type_color || null,
+    status: mapPortalStatus(profile?.status),
+    photo: mediaUrl(profile?.photo_url) || null,
+    email: profile?.email || '',
+    phone: profile?.phone || '',
+    joinDate: formatJoinDate(profile?.joined_at),
+    outstanding,
+    bloodGroup: profile?.blood_group || '—',
+    profession: profile?.profession || profile?.designation || '—',
+    company: profile?.company || '',
+    designation: profile?.designation || '',
+    dob: prettyDay(profile?.date_of_birth),
+    nid: profile?.national_id ? String(profile.national_id) : '—',
+    address: profile?.present_address || profile?.permanent_address || '—',
+    spouse: profile?.spouse_name || '—',
+    nominee: nominee || '—',
+    joinedRaw: profile?.joined_at || null,
+  }
+}
+
+function invoiceUiStatus(inv: PortalInvoice): 'Paid' | 'Overdue' | 'Unpaid' {
+  if (inv.payment_status === 'paid' || Number(inv.due_amount) <= 0) return 'Paid'
+  if (inv.is_overdue) return 'Overdue'
+  return 'Unpaid'
+}
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 const Icons = {
@@ -101,12 +186,12 @@ function StatusChip({ status }: { status: Member['status'] }) {
   )
 }
 
-function TierChip({ tier }: { tier: Member['tier'] }) {
-  const config = {
-    'Founding Member': { bg: 'transparent', color: T.brass, border: `1px solid ${T.brass}` },
-    'Life Member': { bg: T.brandDim, color: T.brand700, border: 'none' },
-    'General Member': { bg: T.surface100, color: T.ink400, border: 'none' },
-  }[tier]
+/** Membership-type chip, tinted with the type's card colour from the API (grey when unset). */
+function TierChip({ tier, color }: { tier: Member['tier']; color: Member['tierColor'] }) {
+  const hex = /^#[0-9a-f]{6}$/i.test(String(color || '')) ? String(color) : null
+  const config = hex
+    ? { bg: `${hex}1F`, color: tierCardGradient(hex)[0], border: 'none' }
+    : { bg: T.surface100, color: T.ink400, border: 'none' }
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', background: config.bg, color: config.color, border: config.border, borderRadius: 999, padding: '3px 9px', fontFamily: 'CKCL', fontSize: 11, fontWeight: 700 }}>
       {tier}
@@ -135,7 +220,7 @@ function AvatarDropdown({ member, onNavigate, onLogout }: { member: Member; onNa
       >
         <div style={{ position: 'relative', flexShrink: 0 }}>
           <div style={{ width: 32, height: 32, borderRadius: '50%', border: `2px solid ${T.brass}`, overflow: 'hidden' }}>
-            <img src={member.photo} alt={member.name} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }}/>
+            <PersonPortrait src={member.photo} name={member.name} initialSize="13px" captionOverlay={false} />
           </div>
           {/* Membership status dot — phones/tablets */}
           <span
@@ -158,7 +243,7 @@ function AvatarDropdown({ member, onNavigate, onLogout }: { member: Member; onNa
           <div style={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 99, width: 240, background: T.surface0, borderRadius: 14, border: `1px solid ${T.ink100}`, boxShadow: '0 8px 32px rgba(14,17,22,0.12), 0 2px 8px rgba(14,17,22,0.06)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 16px', borderBottom: `1px solid ${T.ink100}`, display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 40, height: 40, borderRadius: '50%', border: `2px solid ${T.brass}`, overflow: 'hidden', flexShrink: 0 }}>
-                <img src={member.photo} alt={member.name} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }}/>
+                <PersonPortrait src={member.photo} name={member.name} initialSize="16px" captionOverlay={false} />
               </div>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: T.ink900, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{member.name}</div>
@@ -166,7 +251,7 @@ function AvatarDropdown({ member, onNavigate, onLogout }: { member: Member; onNa
                   <span style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink400 }}>{member.memberNo}</span>
                   <CopyBtn value={member.memberNo} id="dropdown-memberNo" size={18}/>
                 </div>
-                <div style={{ marginTop: 4 }}><TierChip tier={member.tier}/></div>
+                <div style={{ marginTop: 4 }}><TierChip tier={member.tier} color={member.tierColor}/></div>
               </div>
             </div>
             <div style={{ padding: '6px 0' }}>
@@ -199,7 +284,7 @@ function SidebarMemberCard({ member, onNavigate, centered = false }: { member: M
     <div style={{ padding: '4px 8px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ position: 'relative', width: 76, height: 76, alignSelf: centered ? 'center' : undefined }}>
         <div style={{ width: 76, height: 76, borderRadius: '50%', border: `2px solid ${T.brass}`, overflow: 'hidden', background: T.surface100 }}>
-          <img src={member.photo} alt={member.name} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }}/>
+          <PersonPortrait src={member.photo} name={member.name} initialSize="30px" captionOverlay={false} />
         </div>
         <button
           onClick={() => onNavigate('personal-info')}
@@ -220,7 +305,7 @@ function SidebarMemberCard({ member, onNavigate, centered = false }: { member: M
       </div>
 
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: centered ? 'center' : undefined }}>
-        <TierChip tier={member.tier}/>
+        <TierChip tier={member.tier} color={member.tierColor}/>
         <StatusChip status={member.status}/>
       </div>
     </div>
@@ -405,17 +490,20 @@ function PageHeader({ breadcrumb, title, action }: {
 }
 
 // ─── Notice strip ─────────────────────────────────────────────────────────────
-function NoticeStrip({ onNavigate }: { onNavigate: (p: PortalPage) => void }) {
+function NoticeStrip({ count, onNavigate }: { count: number; onNavigate: (p: PortalPage) => void }) {
   const [dismissed, setDismissed] = useState(false)
-  if (dismissed) return null
+  if (dismissed || count <= 0) return null
+  const label = count === 1
+    ? '1 notice was posted recently. Open Club updates to read it.'
+    : `${count} notices were posted recently. Open Club updates to read them.`
   return (
     <div id="dash-notice-strip" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: T.brandDim, borderRadius: 8, borderLeft: `3px solid ${T.brand}` }}>
       <span style={{ color: T.brand, flexShrink: 0, display: 'flex' }}>{Icons.alert}</span>
       <div style={{ flex: 1, fontFamily: 'CKCL', fontSize: 14, color: T.brand700, lineHeight: 1.5 }}>
-        Two new notices were posted this month. Open the notice board to read them.
+        {label}
       </div>
       <button
-        onClick={() => onNavigate('account-statement')}
+        onClick={() => onNavigate('dashboard')}
         style={{ fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: T.brand, background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', padding: 0, flexShrink: 0 }}
       >
         View notices
@@ -462,18 +550,43 @@ function IconTile({ bg, color, children }: { bg: string; color: string; children
 // ─── Dues card ────────────────────────────────────────────────────────────────
 // Phones: compact (amount, overdue state, pay). Tablet/desktop: the fuller card
 // beside the membership card, stretched to the card's height.
-function DuesCard({ outstanding, onNavigate }: { outstanding: number; onNavigate: (p: PortalPage) => void }) {
+function duesStatusLabel(outstanding: number, nextDueDate?: string | null, overdueCount = 0) {
+  if (outstanding <= 0) return 'Paid in full'
+  if (overdueCount > 0) {
+    if (nextDueDate) {
+      const due = new Date(nextDueDate)
+      if (!Number.isNaN(due.getTime())) {
+        const days = Math.max(0, Math.floor((Date.now() - due.getTime()) / 86400000))
+        if (days > 0) return `Overdue · ${days} day${days === 1 ? '' : 's'}`
+      }
+    }
+    return 'Overdue'
+  }
+  if (nextDueDate) {
+    const due = new Date(nextDueDate)
+    if (!Number.isNaN(due.getTime())) {
+      return `Due ${due.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`
+    }
+  }
+  return 'Payment due'
+}
+
+function DuesCard({ outstanding, onNavigate, nextDueDate, overdueCount }: {
+  outstanding: number
+  onNavigate: (p: PortalPage) => void
+  nextDueDate?: string | null
+  overdueCount?: number
+}) {
+  const status = duesStatusLabel(outstanding, nextDueDate, overdueCount)
   return (
     <>
-      <DuesCardFull outstanding={outstanding} onNavigate={onNavigate}/>
-      <DuesCardCompact outstanding={outstanding} onNavigate={onNavigate}/>
+      <DuesCardFull outstanding={outstanding} onNavigate={onNavigate} status={status}/>
+      <DuesCardCompact outstanding={outstanding} onNavigate={onNavigate} status={status}/>
     </>
   )
 }
 
-const DAYS_OVERDUE = 31
-
-function DuesCardFull({ outstanding, onNavigate }: { outstanding: number; onNavigate: (p: PortalPage) => void }) {
+function DuesCardFull({ outstanding, onNavigate, status }: { outstanding: number; onNavigate: (p: PortalPage) => void; status: string }) {
   const isPaid = outstanding === 0
 
   return (
@@ -487,7 +600,7 @@ function DuesCardFull({ outstanding, onNavigate }: { outstanding: number; onNavi
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontFamily: 'CKCL', fontSize: 12.5, fontWeight: 600, color: isPaid ? T.green : T.brand }}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', flexShrink: 0 }}/>
-          {isPaid ? 'Paid in full' : `Overdue · ${DAYS_OVERDUE} days`}
+          {status}
         </div>
       </div>
 
@@ -510,9 +623,8 @@ function DuesCardFull({ outstanding, onNavigate }: { outstanding: number; onNavi
   )
 }
 
-function DuesCardCompact({ outstanding, onNavigate }: { outstanding: number; onNavigate: (p: PortalPage) => void }) {
+function DuesCardCompact({ outstanding, onNavigate, status }: { outstanding: number; onNavigate: (p: PortalPage) => void; status: string }) {
   const isPaid = outstanding === 0
-  const daysOverdue = DAYS_OVERDUE
 
   return (
     <div id="dash-dues-compact" style={{ ...CARD, padding: '16px 18px', alignItems: 'center', gap: 14, minWidth: 0 }}>
@@ -523,7 +635,7 @@ function DuesCardCompact({ outstanding, onNavigate }: { outstanding: number; onN
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: isPaid ? T.green : T.brand }}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', flexShrink: 0 }}/>
-          {isPaid ? 'Paid in full' : `Overdue · ${daysOverdue} days`}
+          {status}
         </div>
       </div>
       {!isPaid && (
@@ -541,10 +653,15 @@ function DuesCardCompact({ outstanding, onNavigate }: { outstanding: number; onN
 }
 
 // ─── Membership card — styled like the Membership Process tier cards ──────────
-const TIER_CARD_COLORS: Record<Member['tier'], [string, string]> = {
-  'Founding Member': ['#6B4C1E', '#B98B43'],
-  'Life Member': ['#7A0710', '#E10B17'],
-  'General Member': ['#0E1116', '#3A424D'],
+const TIER_CARD_FALLBACK: [string, string] = ['#0E1116', '#3A424D']
+
+/** Card gradient from the type's colour: a darker shade of it → the colour itself. */
+function tierCardGradient(color: string | null): [string, string] {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(color || '').trim())
+  if (!m) return TIER_CARD_FALLBACK
+  const n = parseInt(m[1], 16)
+  const shade = (v: number) => Math.round(v * 0.55).toString(16).padStart(2, '0')
+  return [`#${shade(n >> 16)}${shade((n >> 8) & 255)}${shade(n & 255)}`, `#${m[1]}`]
 }
 
 // Small caps label over a value, on the dark tier gradient
@@ -558,7 +675,8 @@ function CardField({ label, children }: { label: string; children: React.ReactNo
 }
 
 function MembershipCard({ member, onOpen }: { member: Member; onOpen?: () => void }) {
-  const [from, to] = TIER_CARD_COLORS[member.tier]
+  const site = useSiteInfo()
+  const [from, to] = tierCardGradient(member.tierColor)
   const active = member.status === 'Active'
   const Tag = onOpen ? 'button' : 'div'
 
@@ -582,8 +700,8 @@ function MembershipCard({ member, onOpen }: { member: Member; onOpen?: () => voi
         {/* Header band: club mark + membership status */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingBottom: '2.6cqw', borderBottom: '1px solid rgba(255,255,255,0.18)' }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 'clamp(14px,5cqw,18px)', letterSpacing: '0.04em', lineHeight: 1 }}>CKCL</div>
-            <div style={{ fontSize: 'clamp(7.5px,2.4cqw,9.5px)', color: 'rgba(255,255,255,0.7)', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Chittagong Khulshi Club Ltd. · Membership Card</div>
+            <div style={{ fontWeight: 700, fontSize: 'clamp(14px,5cqw,18px)', letterSpacing: '0.04em', lineHeight: 1 }}>{site.short_name || site.club_name}</div>
+            <div style={{ fontSize: 'clamp(7.5px,2.4cqw,9.5px)', color: 'rgba(255,255,255,0.7)', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{site.club_name ? `${site.club_name} · ` : ''}Membership Card</div>
           </div>
           <span
             role="status"
@@ -597,7 +715,7 @@ function MembershipCard({ member, onOpen }: { member: Member; onOpen?: () => voi
         {/* Body: framed portrait | labelled fields */}
         <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: '4.5cqw', alignItems: 'stretch' }}>
           <div style={{ height: '100%', aspectRatio: '4 / 5', flexShrink: 0, borderRadius: 10, overflow: 'hidden', border: '2px solid rgba(255,255,255,0.85)', background: 'rgba(255,255,255,0.15)', boxShadow: '0 6px 16px rgba(0,0,0,0.25)' }}>
-            <img src={member.photo} alt={member.name} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top', display: 'block' }}/>
+            <PersonPortrait src={member.photo} name={member.name} initialSize="9cqw" captionOverlay={false} />
           </div>
 
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
@@ -606,14 +724,14 @@ function MembershipCard({ member, onOpen }: { member: Member; onOpen?: () => voi
             </CardField>
             <CardField label="Membership type">{member.tier}</CardField>
             {/* Job title only — the employer doesn't fit on the card */}
-            <CardField label="Occupation">{MEMBER_PROFILE.profession.split(',')[0]}</CardField>
+            <CardField label="Occupation">{(member.profession || '—').split(',')[0]}</CardField>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <CardField label="Membership code">
                 <span style={{ letterSpacing: '0.14em' }}>{member.memberNo}</span>
               </CardField>
-              <CardField label="Blood group">{MEMBER_PROFILE.bloodGroup}</CardField>
+              <CardField label="Blood group">{member.bloodGroup || '—'}</CardField>
             </div>
-            <CardField label="Date of issue">{MEMBER_PROFILE.issuedOn}</CardField>
+            <CardField label="Member since">{member.joinDate}</CardField>
           </div>
         </div>
       </div>
@@ -788,22 +906,34 @@ function YourDetails({ member, onNavigate }: { member: Member; onNavigate: (p: P
 }
 
 // ─── Club updates ─────────────────────────────────────────────────────────────
-const NOTICES_DATA = [
-  { date: '03 Jul', title: '2ND CONVENER COMMITTEE Meeting (Agenda Notice)', bangla: false, type: 'PDF' as const },
-  { date: '08 Jul', title: 'বকেয়া পরিশোধ সংক্রান্ত বিশেষ নোটিশ', bangla: true, type: 'PDF' as const },
-  { date: '09 Jun', title: 'খুলশী ক্লাব পরিবার শোকাহত', bangla: true, type: 'JPG' as const },
-  { date: '02 Jun', title: 'নোটিশ', bangla: true, type: 'PDF' as const },
-]
-const NEWS_DATA = [
-  { date: '09 Jun', title: 'Club Night 2026 — A Night to Remember', bangla: false, type: 'News' as const },
-  { date: '19 May', title: 'Annual Picnic 2026 — Registration now open', bangla: false, type: 'News' as const },
-  { date: '03 Apr', title: 'CKCL Land Video — Official club documentary', bangla: false, type: 'Video' as const },
-  { date: '01 Mar', title: 'দৈনিক আজাদী নিউজ', bangla: true, type: 'News' as const },
-]
-
-function ClubUpdates() {
+function ClubUpdates({ notices }: { notices?: PortalDashboard['notices'] }) {
   const [tab, setTab] = useState<'notices' | 'news'>('notices')
-  const rows = tab === 'notices' ? NOTICES_DATA : NEWS_DATA
+  const noticesApi = useNotices()
+  const newsApi = useNewsList()
+
+  const dashNotices = (notices ?? []).map((n) => ({
+    date: shortNoticeDate(n.published_at),
+    title: n.title,
+    bangla: /[\u0980-\u09FF]/.test(n.title),
+    type: 'Notice' as const,
+  }))
+  const mediaNotices = (noticesApi.data?.notices || []).slice(0, 6).map((n) => ({
+    date: n.date || '—',
+    title: n.title,
+    bangla: n.bangla,
+    type: (n.fileType || 'Notice') as string,
+  }))
+  const liveNotices = dashNotices.length ? dashNotices : mediaNotices
+  const liveNews = (newsApi.data?.articles || []).slice(0, 6).map((a) => ({
+    date: a.date || '—',
+    title: a.title,
+    bangla: /[\u0980-\u09FF]/.test(a.title),
+    type: a.category || 'News',
+  }))
+  const rows = tab === 'notices' ? liveNotices : liveNews
+  const loading = tab === 'notices' ? (!dashNotices.length && noticesApi.loading) : newsApi.loading
+  const error = tab === 'notices' ? (!dashNotices.length ? noticesApi.error : null) : newsApi.error
+
   return (
     <SectionCard
       title="Club updates"
@@ -821,10 +951,17 @@ function ClubUpdates() {
         </div>
       }
     >
+      {loading && <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400, padding: '8px 0' }}>Loading…</div>}
+      {!loading && error && <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.brand, padding: '8px 0' }}>{error}</div>}
+      {!loading && !error && rows.length === 0 && (
+        <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400, padding: '8px 0' }}>
+          {tab === 'notices' ? 'No notices published yet.' : 'No news published yet.'}
+        </div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', margin: '0 -8px' }}>
         {rows.map((row, i) => (
           <div
-            key={i}
+            key={`${row.title}-${i}`}
             style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 8px', borderRadius: 10, cursor: 'pointer', transition: 'background 120ms' }}
             onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface50 }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
@@ -836,23 +973,12 @@ function ClubUpdates() {
           </div>
         ))}
       </div>
-      <button style={{ marginTop: 12, fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: T.brand, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Open the notice board →</button>
     </SectionCard>
   )
 }
 
 // ─── Ad rail ──────────────────────────────────────────────────────────────────
-// Placeholder ads with fictional advertisers — swap for real placements later
-const AD_IMG = {
-  catering: 'https://images.unsplash.com/photo-1643101570532-88c8ecc07c1f?w=400&h=400&fit=crop&auto=format',
-  coffee: 'https://images.unsplash.com/photo-1581115685033-ccf1aa701722?w=400&h=400&fit=crop&auto=format',
-}
-
-const PARTNER_OFFERS = [
-  { name: 'Bay Leaf Travels', offer: "15% off Cox's Bazar weekend packages", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M17.8 19.2L16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></svg> },
-  { name: 'AquaFit Academy', offer: 'First swimming lesson free for kids', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M2 12c2 0 2-1.5 4-1.5S8 12 10 12s2-1.5 4-1.5 2 1.5 4 1.5 2-1.5 4-1.5"/><path d="M2 17c2 0 2-1.5 4-1.5S8 17 10 17s2-1.5 4-1.5 2 1.5 4 1.5 2-1.5 4-1.5"/><circle cx="16" cy="5" r="2"/></svg> },
-  { name: 'Hill View Dental', offer: 'Complimentary check-up for members', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5.5C10.5 4 8.5 3 6.5 3.5 4 4 3 6.5 3.5 9c.5 2.5 1.5 4 2 7 .4 2.5 1 5 2.5 5s1.8-2.5 2.2-4.5c.3-1.3 1-1.8 1.8-1.8s1.5.5 1.8 1.8c.4 2 .8 4.5 2.2 4.5s2.1-2.5 2.5-5c.5-3 1.5-4.5 2-7 .5-2.5-.5-5-3-5.5-2-.5-4 .5-5.5 2z"/></svg> },
-]
+const PARTNER_ICON = <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M20 7H4a2 2 0 00-2 2v6a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
 
 function AdTag({ side = 'right' }: { side?: 'left' | 'right' }) {
   return (
@@ -861,7 +987,7 @@ function AdTag({ side = 'right' }: { side?: 'left' | 'right' }) {
 }
 
 function PromoAd({ title, body, cta, img, imageSide, background }: {
-  title: string; body: string; cta: string; img: string; imageSide: 'left' | 'right'; background: string
+  title: string; body: string; cta: string; img: string | null; imageSide: 'left' | 'right'; background: string
 }) {
   return (
     <a
@@ -872,11 +998,17 @@ function PromoAd({ title, body, cta, img, imageSide, background }: {
       onMouseLeave={(e) => { const el = e.currentTarget as HTMLElement; el.style.transform = ''; el.style.boxShadow = 'none' }}
     >
       {/* The "AD" label sits on the photo's outer corner so it never collides with the headline */}
-      <div style={{ position: 'relative', width: 120, flexShrink: 0 }}>
-        <img src={img} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}/>
-        <AdTag side={imageSide}/>
-      </div>
-      <div style={{ flex: 1, minWidth: 0, padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {/* No offer image uploaded → text-only card (no stock photo) */}
+      {img ? (
+        <div style={{ position: 'relative', width: 120, flexShrink: 0 }}>
+          <img src={img} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}/>
+          <AdTag side={imageSide}/>
+        </div>
+      ) : (
+        <AdTag side={imageSide === 'left' ? 'right' : 'left'}/>
+      )}
+      {/* Without a photo the AD tag sits on the text side — keep the headline clear of it */}
+      <div style={{ flex: 1, minWidth: 0, padding: img ? '18px 18px 16px' : '18px 48px 16px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 16, color: T.ink900, lineHeight: 1.3 }}>{title}</div>
         <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400, lineHeight: 1.5 }}>{body}</div>
         <span style={{ marginTop: 'auto', paddingTop: 4, fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: T.brand }}>{cta} →</span>
@@ -886,46 +1018,53 @@ function PromoAd({ title, body, cta, img, imageSide, background }: {
 }
 
 function AdRail() {
+  const { offers, loading } = useWebsiteOffers()
+  const promos = offers.filter((o) => o.kind === 'promo')
+  const partners = offers.filter((o) => o.kind !== 'promo')
+  const gradients = [
+    'linear-gradient(120deg, #FFF1F2 0%, #FBF4EA 100%)',
+    'linear-gradient(120deg, #F7F2EA 0%, #EEF1F5 100%)',
+  ]
+
+  if (!loading && offers.length === 0) return null
+
   return (
     <aside id="dash-ads" aria-label="Sponsored">
-      <PromoAd
-        title="Plan the perfect event"
-        body="Spice Route Catering — 10% off Convention Hall catering packages for CKCL members."
-        cta="See packages"
-        img={AD_IMG.catering}
-        imageSide="left"
-        background="linear-gradient(120deg, #FFF1F2 0%, #FBF4EA 100%)"
-      />
-      <PromoAd
-        title="Fresh beans, every week"
-        body="Beanstalk Roasters delivers across Chattogram. Use code CKCL15 on your first order."
-        cta="Order now"
-        img={AD_IMG.coffee}
-        imageSide="right"
-        background="linear-gradient(120deg, #F7F2EA 0%, #EEF1F5 100%)"
-      />
+      {promos.map((p, i) => (
+        <PromoAd
+          key={p.id}
+          title={p.title}
+          body={p.body || p.offer_text || ''}
+          cta={p.cta_label || 'Learn more'}
+          img={p.image || null}
+          imageSide={i % 2 === 0 ? 'left' : 'right'}
+          background={gradients[i % gradients.length]}
+        />
+      ))}
 
-      <section style={{ ...CARD, position: 'relative', padding: '18px 20px 12px' }}>
-        <AdTag/>
-        <h2 style={{ margin: 0, paddingBottom: 12, marginBottom: 6, borderBottom: `1px solid ${T.ink100}`, fontFamily: 'CKCL', fontWeight: 600, fontSize: 16, color: T.ink700 }}>Partner offers</h2>
-        {PARTNER_OFFERS.map((p) => (
-          <a
-            key={p.name}
-            href="#"
-            onClick={(e) => e.preventDefault()}
-            style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 8px', margin: '0 -8px', borderRadius: 10, textDecoration: 'none', transition: 'background 120ms' }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface50 }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-          >
-            <IconTile bg={T.brandDim} color={T.brand}>{p.icon}</IconTile>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900 }}>{p.name}</div>
-              <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.green }}>{p.offer}</div>
-            </div>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.ink400} strokeWidth="2.2" style={{ flexShrink: 0 }}><polyline points="9 18 15 12 9 6"/></svg>
-          </a>
-        ))}
-      </section>
+      {partners.length > 0 && (
+        <section style={{ ...CARD, position: 'relative', padding: '18px 20px 12px' }}>
+          <AdTag/>
+          <h2 style={{ margin: 0, paddingBottom: 12, marginBottom: 6, borderBottom: `1px solid ${T.ink100}`, fontFamily: 'CKCL', fontWeight: 600, fontSize: 16, color: T.ink700 }}>Partner offers</h2>
+          {partners.map((p) => (
+            <a
+              key={p.id}
+              href={p.cta_url || '#'}
+              onClick={(e) => { if (!p.cta_url || p.cta_url === '#') e.preventDefault() }}
+              style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 8px', margin: '0 -8px', borderRadius: 10, textDecoration: 'none', transition: 'background 120ms' }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface50 }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            >
+              <IconTile bg={T.brandDim} color={T.brand}>{PARTNER_ICON}</IconTile>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900 }}>{p.partner_name || p.title}</div>
+                <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.green }}>{p.offer_text || p.body}</div>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.ink400} strokeWidth="2.2" style={{ flexShrink: 0 }}><polyline points="9 18 15 12 9 6"/></svg>
+            </a>
+          ))}
+        </section>
+      )}
     </aside>
   )
 }
@@ -944,9 +1083,22 @@ function membershipState(status: Member['status']) {
         title: 'Your membership is inactive', note: 'Your membership has expired. Contact the club office to renew.', cta: { label: 'Contact helpdesk', page: 'helpdesk' as PortalPage } }
 }
 
-function Dashboard({ member, onNavigate }: { member: Member; onNavigate: (p: PortalPage) => void }) {
-  const overdue = DUES.filter((d) => d.status === 'Overdue')
-  const totalOutstanding = overdue.reduce((s, d) => s + d.amount, 0)
+function Dashboard({
+  member,
+  onNavigate,
+  outstanding,
+  notices,
+  nextDueDate,
+  overdueCount,
+}: {
+  member: Member
+  onNavigate: (p: PortalPage) => void
+  outstanding: number
+  notices?: PortalDashboard['notices']
+  nextDueDate?: string | null
+  overdueCount?: number
+}) {
+  const totalOutstanding = outstanding
   const openCard = () => onNavigate('membership-card')
 
   return (
@@ -959,7 +1111,7 @@ function Dashboard({ member, onNavigate }: { member: Member; onNavigate: (p: Por
           <InactiveNote member={member} onNavigate={onNavigate}/>
         </div>
 
-        <NoticeStrip onNavigate={onNavigate}/>
+        <NoticeStrip count={(notices || []).length} onNavigate={onNavigate}/>
 
         {/* Tablet/desktop: membership card | dues (same height) | view all */}
         <div id="dash-summary">
@@ -967,13 +1119,13 @@ function Dashboard({ member, onNavigate }: { member: Member; onNavigate: (p: Por
             <MembershipCard member={member} onOpen={openCard}/>
             <InactiveNote member={member} onNavigate={onNavigate}/>
           </div>
-          <DuesCard outstanding={totalOutstanding} onNavigate={onNavigate}/>
+          <DuesCard outstanding={totalOutstanding} onNavigate={onNavigate} nextDueDate={nextDueDate} overdueCount={overdueCount}/>
           <ViewAllCard onNavigate={onNavigate}/>
         </div>
 
         <QuickActions onNavigate={onNavigate}/>
         <YourDetails member={member} onNavigate={onNavigate}/>
-        <ClubUpdates/>
+        <ClubUpdates notices={notices}/>
       </div>
 
       {/* Right column — ad placements */}
@@ -983,36 +1135,6 @@ function Dashboard({ member, onNavigate }: { member: Member; onNavigate: (p: Por
 }
 
 // ─── Membership card view: Details · Transactions ─────────────────────────────
-// Mock record — replace with the member's profile from the API
-const MEMBER_PROFILE = {
-  validThrough: 'June 2027',
-  issuedOn: '01 July 2025',
-  dob: '12 April 1968',
-  bloodGroup: 'B+',
-  nid: '•••• •••• 4471',
-  address: 'House 14, Road 2, Khulshi R/A, Chattogram 4225',
-  profession: 'Managing Director, Islam Group of Industries',
-  spouse: 'Mrs. Salma Islam',
-  nominee: 'Mrs. Salma Islam (Spouse)',
-  proposer: 'Founding member',
-  lastPayment: { amount: 5000, date: '15 Jul 2026' },
-  nextDue: { amount: 2500, date: '01 Oct 2026' },
-}
-
-type CardTxn = { id: string; date: string; time: string; title: string; detail: string; amount: number }
-
-// Negative = charge to the member's account, positive = payment received
-const CARD_TRANSACTIONS: CardTxn[] = [
-  { id: 'INV-2026-0931', date: '28 Sep 2026', time: '08:14 PM', title: 'Main Dining Hall — Dinner', detail: 'Restaurant bill · Table 12 · 4 guests', amount: -3850 },
-  { id: 'INV-2026-0918', date: '21 Sep 2026', time: '02:00 PM', title: 'Guest House — 1 night', detail: 'Room 204 · Check-in 21 Sep', amount: -4000 },
-  { id: 'INV-2026-0912', date: '14 Sep 2026', time: '10:32 AM', title: 'Swimming Pool — Guest pass', detail: '2 guests', amount: -600 },
-  { id: 'INV-2026-009', date: '01 Sep 2026', time: '12:00 AM', title: 'Monthly subscription — Sep 2026', detail: 'Membership dues', amount: -2500 },
-  { id: 'INV-2026-008', date: '01 Aug 2026', time: '12:00 AM', title: 'Monthly subscription — Aug 2026', detail: 'Membership dues', amount: -2500 },
-  { id: 'PAY-2026-005', date: '15 Jul 2026', time: '06:47 PM', title: 'Payment received — bKash', detail: 'Ref. TXN8K2Q4PZ · Thank you', amount: 5000 },
-  { id: 'INV-2026-007', date: '01 Jul 2026', time: '12:00 AM', title: 'Monthly subscription — Jul 2026', detail: 'Membership dues', amount: -2500 },
-  { id: 'PAY-2026-004', date: '20 Jun 2026', time: '11:05 AM', title: 'Payment received — Card', detail: 'Visa •••• 4417', amount: 2500 },
-  { id: 'INV-2026-006', date: '01 Jun 2026', time: '12:00 AM', title: 'Monthly subscription — Jun 2026', detail: 'Membership dues', amount: -2500 },
-]
 
 function DefItem({ label, children, wide }: { label: string; children: React.ReactNode; wide?: boolean }) {
   return (
@@ -1037,17 +1159,28 @@ function DefCard({ title, children, action }: { title?: string; children: React.
   )
 }
 
-function CardDetails({ member, outstanding, onNavigate }: { member: Member; outstanding: number; onNavigate: (p: PortalPage) => void }) {
-  const p = MEMBER_PROFILE
+function CardDetails({ member, outstanding, onNavigate, dashboard }: {
+  member: Member
+  outstanding: number
+  onNavigate: (p: PortalPage) => void
+  dashboard: PortalDashboard | null
+}) {
   const st = membershipState(member.status)
+  const last = dashboard?.last_payment
+  const nextDueAmt = Number(dashboard?.monthly_fees || 0)
+  const nextDueDate = prettyDay(dashboard?.next_due_date)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <DefCard>
         <DefItem label="Outstanding balance" wide>
           <span style={{ fontSize: 22, fontWeight: 600, color: outstanding > 0 ? T.brand : T.ink900 }}>৳ {outstanding.toLocaleString()}</span>
         </DefItem>
-        <DefItem label="Last payment">৳ {p.lastPayment.amount.toLocaleString()}<div style={{ fontSize: 12, color: T.ink400 }}>{p.lastPayment.date}</div></DefItem>
-        <DefItem label="Next due">৳ {p.nextDue.amount.toLocaleString()}<div style={{ fontSize: 12, color: T.ink400 }}>{p.nextDue.date}</div></DefItem>
+        <DefItem label="Last payment">
+          {last ? <>৳ {Number(last.amount || 0).toLocaleString()}<div style={{ fontSize: 12, color: T.ink400 }}>{prettyDay(last.paid_at || last.payment_date)}</div></> : '—'}
+        </DefItem>
+        <DefItem label="Next due">
+          {dashboard?.next_due_date ? <>৳ {nextDueAmt.toLocaleString()}<div style={{ fontSize: 12, color: T.ink400 }}>{nextDueDate}</div></> : '—'}
+        </DefItem>
         <div style={{ gridColumn: '1 / -1' }}>
           <button
             onClick={() => onNavigate('account-statement')}
@@ -1067,8 +1200,6 @@ function CardDetails({ member, outstanding, onNavigate }: { member: Member; outs
         <DefItem label="Status"><span style={{ color: st.color, fontWeight: 600 }}>{st.label}</span></DefItem>
         <DefItem label="Membership type">{member.tier}</DefItem>
         <DefItem label="Member since">{member.joinDate}</DefItem>
-        <DefItem label="Card valid through">{p.validThrough}</DefItem>
-        <DefItem label="Proposed by">{p.proposer}</DefItem>
       </DefCard>
 
       <DefCard
@@ -1076,26 +1207,56 @@ function CardDetails({ member, outstanding, onNavigate }: { member: Member; outs
         action={<button onClick={() => onNavigate('personal-info')} style={{ fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: T.brand, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Edit</button>}
       >
         <DefItem label="Name" wide>{member.name}</DefItem>
-        <DefItem label="Mobile">{member.phone}</DefItem>
-        <DefItem label="Email">{member.email}</DefItem>
-        <DefItem label="Date of birth">{p.dob}</DefItem>
-        <DefItem label="Blood group">{p.bloodGroup}</DefItem>
-        <DefItem label="NID">{p.nid}</DefItem>
-        <DefItem label="Spouse">{p.spouse}</DefItem>
-        <DefItem label="Profession" wide>{p.profession}</DefItem>
-        <DefItem label="Address" wide>{p.address}</DefItem>
-        <DefItem label="Nominee" wide>{p.nominee}</DefItem>
+        <DefItem label="Mobile">{member.phone || '—'}</DefItem>
+        <DefItem label="Email">{member.email || '—'}</DefItem>
+        <DefItem label="Date of birth">{member.dob || '—'}</DefItem>
+        <DefItem label="Blood group">{member.bloodGroup || '—'}</DefItem>
+        <DefItem label="NID">{member.nid || '—'}</DefItem>
+        <DefItem label="Spouse">{member.spouse || '—'}</DefItem>
+        <DefItem label="Profession" wide>{member.profession || '—'}</DefItem>
+        <DefItem label="Address" wide>{member.address || '—'}</DefItem>
+        <DefItem label="Nominee" wide>{member.nominee || '—'}</DefItem>
       </DefCard>
     </div>
   )
 }
+
+type CardTxn = { id: string; date: string; time: string; title: string; detail: string; amount: number }
 
 type TxnFilter = 'all' | 'charges' | 'payments'
 
 function CardTransactions() {
   const [filter, setFilter] = useState<TxnFilter>('all')
   const [open, setOpen] = useState<string | null>(null)
-  const rows = CARD_TRANSACTIONS.filter((t) => filter === 'all' || (filter === 'payments' ? t.amount > 0 : t.amount < 0))
+  const invoices = usePortalInvoices('all', true)
+  const payments = usePortalPayments(true)
+
+  const rows: CardTxn[] = []
+  for (const inv of invoices.data || []) {
+    rows.push({
+      id: inv.invoice_no || inv.id,
+      date: prettyDay(inv.issue_date || inv.due_date),
+      time: '',
+      title: inv.period ? `Invoice — ${inv.period}` : (inv.type ? `Invoice — ${inv.type}` : 'Invoice'),
+      detail: inv.payment_status ? `Status: ${inv.payment_status}` : 'Club invoice',
+      amount: -Math.abs(Number(inv.due_amount ?? inv.total ?? 0)),
+    })
+  }
+  for (const p of payments.data || []) {
+    rows.push({
+      id: p.receipt_no || p.tran_id || p.id,
+      date: prettyDay(p.paid_at || p.payment_date),
+      time: '',
+      title: p.method ? `Payment received — ${p.method}` : 'Payment received',
+      detail: p.tran_id ? `Ref. ${p.tran_id}` : (p.receipt_no || 'Payment'),
+      amount: Math.abs(Number(p.amount || 0)),
+    })
+  }
+  rows.sort((a, b) => String(b.date).localeCompare(String(a.date)))
+
+  const loading = invoices.loading || payments.loading
+  const error = invoices.error || payments.error
+  const filtered = rows.filter((t) => filter === 'all' || (filter === 'payments' ? t.amount > 0 : t.amount < 0))
   const filters: { id: TxnFilter; label: string }[] = [{ id: 'all', label: 'All' }, { id: 'charges', label: 'Charges' }, { id: 'payments', label: 'Payments' }]
 
   return (
@@ -1113,28 +1274,31 @@ function CardTransactions() {
           )
         })}
       </div>
-
-      <div style={{ ...CARD, padding: '6px 0' }}>
-        {rows.map((t, i) => {
-          const expanded = open === t.id
+      {loading && <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400, padding: 16 }}>Loading transactions…</div>}
+      {error && <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.brand, padding: 16 }}>{error}</div>}
+      {!loading && !error && filtered.length === 0 && (
+        <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400, padding: 16 }}>No transactions yet.</div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0, background: T.surface0, borderRadius: 14, border: `1px solid ${T.ink100}`, overflow: 'hidden' }}>
+        {filtered.map((t, i) => {
           const credit = t.amount > 0
+          const opened = open === t.id
           return (
-            <div key={t.id} style={{ borderTop: i ? `1px solid ${T.surface100}` : 'none' }}>
+            <div key={`${t.id}-${i}`} style={{ borderBottom: i < filtered.length - 1 ? `1px solid ${T.ink100}` : 'none' }}>
               <button
-                onClick={() => setOpen(expanded ? null : t.id)}
-                aria-expanded={expanded}
-                style={{ width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '14px 18px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+                type="button"
+                onClick={() => setOpen(opened ? null : t.id)}
+                style={{ width: '100%', textAlign: 'left', padding: '14px 18px', background: 'transparent', border: 'none', cursor: 'pointer', display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'center' }}
               >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: 'CKCL', fontSize: 15, color: T.ink900, lineHeight: 1.35 }}>{t.title}</div>
-                  <div style={{ fontFamily: 'CKCL', fontSize: 12.5, color: T.ink400, marginTop: 3 }}>{t.date} • {t.time}</div>
+                <div>
+                  <div style={{ fontFamily: 'CKCL', fontSize: 14, fontWeight: 600, color: T.ink900 }}>{t.title}</div>
+                  <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 3 }}>{t.date}{t.time ? ` · ${t.time}` : ''}</div>
                 </div>
-                <span style={{ fontFamily: 'CKCL', fontSize: 15, fontWeight: 600, color: credit ? T.green : '#E5671B', whiteSpace: 'nowrap' }}>
-                  {credit ? '+' : '-'} ৳{Math.abs(t.amount).toLocaleString('en-BD', { minimumFractionDigits: 2 })}
-                </span>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.ink400} strokeWidth="2" style={{ flexShrink: 0, marginTop: 2, transition: 'transform 200ms', transform: expanded ? 'rotate(90deg)' : 'none' }}><polyline points="9 18 15 12 9 6"/></svg>
+                <div style={{ fontFamily: 'CKCL', fontWeight: 700, fontSize: 14, color: credit ? T.green : T.ink900 }}>
+                  {credit ? '+' : ''}৳ {Math.abs(t.amount).toLocaleString()}
+                </div>
               </button>
-              {expanded && (
+              {opened && (
                 <div style={{ margin: '0 18px 14px', padding: '10px 12px', background: T.surface50, borderRadius: 10, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 14px', fontFamily: 'CKCL', fontSize: 12.5 }}>
                   <span style={{ color: T.ink400 }}>Reference</span><span style={{ color: T.ink900, fontWeight: 600 }}>{t.id}</span>
                   <span style={{ color: T.ink400 }}>Details</span><span style={{ color: T.ink700 }}>{t.detail}</span>
@@ -1151,7 +1315,8 @@ function CardTransactions() {
 
 function MembershipCardView({ member, onNavigate }: { member: Member; onNavigate: (p: PortalPage) => void }) {
   const [tab, setTab] = useState<'details' | 'transactions'>('details')
-  const outstanding = DUES.filter((d) => d.status === 'Overdue').reduce((s, d) => s + d.amount, 0)
+  const dash = usePortalDashboard(true)
+  const outstanding = Number(dash.data?.total_due ?? member.outstanding ?? 0)
 
   return (
     <div style={{ maxWidth: 620, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20, paddingBottom: 40 }}>
@@ -1188,7 +1353,7 @@ function MembershipCardView({ member, onNavigate }: { member: Member; onNavigate
         })}
       </div>
 
-      {tab === 'details' ? <CardDetails member={member} outstanding={outstanding} onNavigate={onNavigate}/> : <CardTransactions/>}
+      {tab === 'details' ? <CardDetails member={member} outstanding={outstanding} onNavigate={onNavigate} dashboard={dash.data}/> : <CardTransactions/>}
     </div>
   )
 }
@@ -1295,28 +1460,98 @@ function IconBtn({ title, children, onClick }: { title: string; children: React.
 }
 
 // ─── G. Account Statement ─────────────────────────────────────────────────────
-const STATEMENT_DATA = [
-  { date: '01 Sep 2026', voucher: 'BF-001', particulars: 'Balance brought forward', due: 5000, paid: 0, balance: 5000, isBF: true },
-  { date: '01 Sep 2026', voucher: 'INV-2026-009', particulars: 'Monthly subscription — Sep 2026', due: 2500, paid: 0, balance: 7500, isBF: false },
-  { date: '01 Aug 2026', voucher: 'INV-2026-008', particulars: 'Monthly subscription — Aug 2026', due: 2500, paid: 0, balance: 5000, isBF: false },
-  { date: '15 Jul 2026', voucher: 'PAY-2026-005', particulars: 'Online payment received — Thank you', due: 0, paid: 5000, balance: 0, isBF: false },
-  { date: '01 Jul 2026', voucher: 'INV-2026-007', particulars: 'Monthly subscription — Jul 2026', due: 2500, paid: 0, balance: 5000, isBF: false },
-  { date: '20 Jun 2026', voucher: 'PAY-2026-004', particulars: 'Online payment received — Thank you', due: 0, paid: 2500, balance: 2500, isBF: false },
-  { date: '01 Jun 2026', voucher: 'INV-2026-006', particulars: 'Monthly subscription — Jun 2026', due: 2500, paid: 0, balance: 5000, isBF: false },
-]
+type StatementRow = {
+  date: string; voucher: string; particulars: string; due: number; paid: number; balance: number; isBF: boolean
+}
 type Preset = 'this-month' | 'last-3' | 'this-year' | 'custom'
 
-function AccountStatement() {
-  const [preset, setPreset] = useState<Preset>('last-3')
-  const [fromDate, setFromDate] = useState('2026-07-01')
-  const [toDate, setToDate] = useState('2026-09-30')
-  const [tableState, setTableState] = useState<'populated' | 'loading' | 'error'>('populated')
-  const rows = tableState === 'populated' ? STATEMENT_DATA : []
+function isoDate(d: Date) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 
-  const openingBalance = 5000
-  const totalCharged = rows.filter((r) => !r.isBF).reduce((s, r) => s + r.due, 0)
-  const totalPaid = rows.reduce((s, r) => s + r.paid, 0)
-  const closingBalance = rows[rows.length - 1]?.balance ?? 0
+function rangeForPreset(preset: Exclude<Preset, 'custom'>): { from: string; to: string } {
+  const today = new Date()
+  const to = isoDate(today)
+  if (preset === 'this-month') return { from: isoDate(new Date(today.getFullYear(), today.getMonth(), 1)), to }
+  if (preset === 'this-year') return { from: isoDate(new Date(today.getFullYear(), 0, 1)), to }
+  // last-3: from 1st of month two months ago → today
+  return { from: isoDate(new Date(today.getFullYear(), today.getMonth() - 2, 1)), to }
+}
+
+function AccountStatement() {
+  const initial = rangeForPreset('last-3')
+  const [preset, setPreset] = useState<Preset>('last-3')
+  const [fromDate, setFromDate] = useState(initial.from)
+  const [toDate, setToDate] = useState(initial.to)
+  const [tableState, setTableState] = useState<'populated' | 'loading' | 'error'>('loading')
+  const [liveRows, setLiveRows] = useState<StatementRow[]>([])
+  const [openingBalance, setOpeningBalance] = useState(0)
+  const [closingBalance, setClosingBalance] = useState(0)
+  const [totalCharged, setTotalCharged] = useState(0)
+  const [totalPaid, setTotalPaid] = useState(0)
+  const [actionNote, setActionNote] = useState<string | null>(null)
+  const [pdfBusy, setPdfBusy] = useState(false)
+
+  const downloadPdf = async () => {
+    if (pdfBusy) return
+    setPdfBusy(true)
+    setActionNote(null)
+    try {
+      await downloadPortalStatementPdf(fromDate, toDate)
+      setActionNote('Statement PDF downloaded.')
+      setTimeout(() => setActionNote(null), 2500)
+    } catch (e) {
+      setActionNote(e instanceof Error ? e.message : 'Could not download PDF.')
+    } finally {
+      setPdfBusy(false)
+    }
+  }
+
+  const loadStatement = useCallback(async (from = fromDate, to = toDate) => {
+    setTableState('loading')
+    try {
+      const data = await fetchPortalStatement(from, to)
+      const entries = data.entries || data.lines || []
+      const mapped: StatementRow[] = entries.map((e) => ({
+        date: prettyDay(e.date),
+        voucher: e.reference || '—',
+        particulars: e.description || e.type || '—',
+        due: Number(e.debit || 0),
+        paid: Number(e.credit || 0),
+        balance: Number(e.balance || 0),
+        isBF: false,
+      }))
+      // Opening balance as a brought-forward row when non-zero
+      const opening = Number(data.opening_balance || 0)
+      const withBf = opening !== 0
+        ? [{ date: prettyDay(from), voucher: 'BF', particulars: 'Balance brought forward', due: 0, paid: 0, balance: opening, isBF: true }, ...mapped]
+        : mapped
+      setLiveRows(withBf)
+      setOpeningBalance(opening)
+      setClosingBalance(Number(data.closing_balance || 0))
+      setTotalCharged(Number(data.total_debit || mapped.reduce((s, r) => s + r.due, 0)))
+      setTotalPaid(Number(data.total_credit || mapped.reduce((s, r) => s + r.paid, 0)))
+      setTableState('populated')
+    } catch {
+      setTableState('error')
+    }
+  }, [fromDate, toDate])
+
+  useEffect(() => { void loadStatement() }, []) // initial load only
+
+  const applyPreset = (id: Preset) => {
+    setPreset(id)
+    if (id === 'custom') return
+    const range = rangeForPreset(id)
+    setFromDate(range.from)
+    setToDate(range.to)
+    void loadStatement(range.from, range.to)
+  }
+
+  const rows = tableState === 'populated' ? liveRows : []
 
   const presets: { id: Preset; label: string }[] = [
     { id: 'this-month', label: 'This month' },
@@ -1344,13 +1579,13 @@ function AccountStatement() {
         {/* Preset chips */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {presets.map((p) => (
-            <button key={p.id} onClick={() => setPreset(p.id)} style={{ height: 40, padding: '0 14px', borderRadius: 8, border: `1.5px solid ${preset === p.id ? T.brand : T.ink100}`, background: preset === p.id ? T.brandDim : T.surface0, fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: preset === p.id ? T.brand : T.ink600, cursor: 'pointer', transition: 'all 140ms' }}>
+            <button key={p.id} onClick={() => applyPreset(p.id)} style={{ height: 40, padding: '0 14px', borderRadius: 8, border: `1.5px solid ${preset === p.id ? T.brand : T.ink100}`, background: preset === p.id ? T.brandDim : T.surface0, fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: preset === p.id ? T.brand : T.ink600, cursor: 'pointer', transition: 'all 140ms' }}>
               {p.label}
             </button>
           ))}
         </div>
         <button
-          onClick={() => { setTableState('loading'); setTimeout(() => setTableState('populated'), 1000) }}
+          onClick={() => { void loadStatement(fromDate, toDate) }}
           style={{ height: 40, padding: '0 20px', borderRadius: 8, border: 'none', background: tableState === 'loading' ? T.ink200 : T.brand, fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: '#FFF', cursor: tableState === 'loading' ? 'not-allowed' : 'pointer', transition: 'background 160ms', whiteSpace: 'nowrap' }}
           onMouseEnter={(e) => { if (tableState !== 'loading') (e.currentTarget as HTMLElement).style.background = T.brand700 }}
           onMouseLeave={(e) => { if (tableState !== 'loading') (e.currentTarget as HTMLElement).style.background = T.brand }}
@@ -1359,10 +1594,15 @@ function AccountStatement() {
         </button>
         <div style={{ flex: 1 }}/>
         <div style={{ display: 'flex', gap: 8 }}>
-          <IconBtn title="Download PDF"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></IconBtn>
-          <IconBtn title="Print"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg></IconBtn>
+          <IconBtn title={pdfBusy ? 'Preparing PDF…' : 'Download PDF'} onClick={() => { void downloadPdf() }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </IconBtn>
+          <IconBtn title="Print" onClick={() => window.print()}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg></IconBtn>
         </div>
       </div>
+      {actionNote && (
+        <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink600, background: T.surface0, border: `1px solid ${T.ink100}`, borderRadius: 10, padding: '10px 14px' }}>{actionNote}</div>
+      )}
 
       {/* Summary strip */}
       <div id="stmt-summary" style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
@@ -1385,7 +1625,7 @@ function AccountStatement() {
         {/* Period caption */}
         <div style={{ padding: '14px 20px', borderBottom: `1px solid ${T.ink100}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400 }}>
-            Statement period: <span style={{ fontFamily: 'CKCL', color: T.ink700 }}>01 Jul 2026 – 30 Sep 2026</span>
+            Statement period: <span style={{ fontFamily: 'CKCL', color: T.ink700 }}>{prettyDay(fromDate)} – {prettyDay(toDate)}</span>
           </div>
           <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400 }}>
             {rows.length} transactions
@@ -1399,13 +1639,13 @@ function AccountStatement() {
 
         {/* Rows / loading / error */}
         {tableState === 'loading' && <TableSkeleton cols={colGrid}/>}
-        {tableState === 'error' && <TableError onRetry={() => setTableState('populated')}/>}
+        {tableState === 'error' && <TableError onRetry={() => { void loadStatement() }}/>}
         {tableState === 'populated' && rows.length === 0 && (
           <TableEmpty
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>}
             heading="No transactions in this period"
             body="Try a wider date range."
-            action={<button onClick={() => setPreset('this-year')} style={{ height: 36, padding: '0 16px', borderRadius: 8, border: '1.5px solid #E2E6EC', background: 'transparent', fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: '#2A3039', cursor: 'pointer' }}>Reset to this year</button>}
+            action={<button onClick={() => applyPreset('this-year')} style={{ height: 36, padding: '0 16px', borderRadius: 8, border: '1.5px solid #E2E6EC', background: 'transparent', fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: '#2A3039', cursor: 'pointer' }}>Reset to this year</button>}
           />
         )}
         {tableState === 'populated' && rows.map((row, i) => (
@@ -1438,14 +1678,6 @@ function AccountStatement() {
 }
 
 // ─── H. Payment History ───────────────────────────────────────────────────────
-const PAYMENT_HISTORY = [
-  { id: 1, date: '15 Jul 2026', invoiceId: 'INV-2026-007', purpose: 'Monthly subscription — Jul 2026', amount: 5000, status: 'Paid' as DueStatus },
-  { id: 2, date: '20 Jun 2026', invoiceId: 'INV-2026-006', purpose: 'Monthly subscription — Jun 2026', amount: 2500, status: 'Paid' as DueStatus },
-  { id: 3, date: '10 May 2026', invoiceId: 'INV-2026-005', purpose: 'Monthly subscription — May 2026', amount: 2500, status: 'Paid' as DueStatus },
-  { id: 4, date: '02 Apr 2026', invoiceId: 'INV-2026-004', purpose: 'Monthly subscription — Apr 2026', amount: 2500, status: 'Paid' as DueStatus },
-  { id: 5, date: '05 Mar 2026', invoiceId: 'INV-2026-003', purpose: 'Monthly subscription — Mar 2026', amount: 2500, status: 'Failed' as DueStatus },
-  { id: 6, date: '02 Feb 2026', invoiceId: 'INV-2026-002', purpose: 'Monthly subscription — Feb 2026', amount: 2500, status: 'Paid' as DueStatus },
-]
 type HistoryFilter = 'All' | 'Paid' | 'Pending' | 'Failed'
 const HISTORY_FILTERS: HistoryFilter[] = ['All', 'Paid', 'Pending', 'Failed']
 const HISTORY_COLS = ['#', 'Date', 'Invoice ID', 'Purpose', 'Amount', 'Status', 'Receipt']
@@ -1455,10 +1687,25 @@ function PaymentHistory() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<HistoryFilter>('All')
   const [page] = useState(1)
-  const [tableState, setTableState] = useState<'populated' | 'loading' | 'error'>('populated')
+  const { data, error, loading, reload } = usePortalPayments()
   const PER_PAGE = 10
 
-  const filtered = PAYMENT_HISTORY.filter((r) => {
+  const paymentRows = (data ?? []).map((p: PortalPayment) => {
+    const st = String(p.status || '').toLowerCase()
+    const status: DueStatus = st === 'success' || st === 'paid' ? 'Paid' : st === 'failed' ? 'Failed' : st === 'cancelled' ? 'Cancelled' : 'Pending'
+    return {
+      id: p.receipt_no || p.tran_id || p.id,
+      date: prettyDay(p.paid_at || p.payment_date),
+      invoiceId: p.tran_id || p.receipt_no || '—',
+      purpose: p.method ? `Payment — ${p.method}` : 'Payment received',
+      amount: Number(p.amount || 0),
+      status,
+    }
+  })
+
+  const source = paymentRows
+  const tableState: 'populated' | 'loading' | 'error' | 'empty' = loading ? 'loading' : error ? 'error' : source.length ? 'populated' : 'empty'
+  const filtered = source.filter((r) => {
     const matchFilter = filter === 'All' || r.status === filter
     const matchSearch = !search || r.purpose.toLowerCase().includes(search.toLowerCase()) || r.invoiceId.toLowerCase().includes(search.toLowerCase())
     return matchFilter && matchSearch
@@ -1493,8 +1740,8 @@ function PaymentHistory() {
       </div>
 
       {tableState === 'loading' && <TableSkeleton cols={HISTORY_GRID}/>}
-      {tableState === 'error' && <TableError onRetry={() => setTableState('populated')}/>}
-      {tableState === 'populated' && filtered.length === 0
+      {tableState === 'error' && <TableError onRetry={reload}/>}
+      {(tableState === 'empty' || (tableState === 'populated' && filtered.length === 0))
         ? <TableEmpty
             icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>}
             heading="No payments found"
@@ -1542,17 +1789,15 @@ function PaymentHistory() {
 }
 
 // ─── I. Invoices ──────────────────────────────────────────────────────────────
-const INVOICE_DATA = [
-  { id: 1, date: '01 Sep 2026', purpose: 'Monthly subscription — Sep 2026', amount: 2500, status: 'Unpaid' as DueStatus },
-  { id: 2, date: '01 Aug 2026', purpose: 'Monthly subscription — Aug 2026', amount: 2500, status: 'Overdue' as DueStatus },
-  { id: 3, date: '01 Jul 2026', purpose: 'Monthly subscription — Jul 2026', amount: 2500, status: 'Paid' as DueStatus },
-  { id: 4, date: '01 Jun 2026', purpose: 'Monthly subscription — Jun 2026', amount: 2500, status: 'Paid' as DueStatus },
-  { id: 5, date: '01 May 2026', purpose: 'Monthly subscription — May 2026', amount: 2500, status: 'Paid' as DueStatus },
-]
 const INV_COLS = ['#', 'Date', 'Purpose', 'Due amount', 'Status', 'Action']
 const INV_GRID = '44px 120px 1fr 140px 120px 120px'
 
-type InvoiceModalData = { id: number; date: string; purpose: string; amount: number; status: DueStatus }
+type InvoiceModalData = {
+  id: number; date: string; purpose: string; amount: number; status: DueStatus
+  /** From the API — never built on the client. */
+  invoiceNo: string; dueDate: string
+  lines: { description: string; amount: number }[]
+}
 
 function InvoiceModal({ inv, member, onClose }: { inv: InvoiceModalData; member: Member; onClose: () => void }) {
   return (
@@ -1561,9 +1806,9 @@ function InvoiceModal({ inv, member, onClose }: { inv: InvoiceModalData; member:
         {/* Invoice header */}
         <div style={{ padding: '28px 32px', borderBottom: `1px solid ${T.ink100}`, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <div>
-            <img src={logoImg} alt="Chittagong Khulshi Club Ltd." style={{ height: 28, width: 'auto', objectFit: 'contain', marginBottom: 10 }}/>
+            <ClubLogo height={28} style={{ marginBottom: 10 }} />
             <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 18, color: T.ink900 }}>Tax Invoice</div>
-            <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>INV-2026-00{inv.id}</div>
+            <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>{inv.invoiceNo}</div>
           </div>
           <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${T.ink100}`, background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.ink400 }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1586,7 +1831,7 @@ function InvoiceModal({ inv, member, onClose }: { inv: InvoiceModalData; member:
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400 }}>Due date</span>
-                  <span style={{ fontFamily: 'CKCL', fontSize: 12, color: T.brand }}>15 {inv.date.split(' ').slice(1).join(' ')}</span>
+                  <span style={{ fontFamily: 'CKCL', fontSize: 12, color: T.brand }}>{inv.dueDate}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400 }}>Status</span>
@@ -1602,10 +1847,13 @@ function InvoiceModal({ inv, member, onClose }: { inv: InvoiceModalData; member:
               <ColHead label="Description"/>
               <ColHead label="Amount" right/>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', height: 52, alignItems: 'center', borderBottom: `1px solid ${T.ink100}` }}>
-              <div style={{ padding: '0 16px', fontFamily: 'CKCL', fontSize: 13, color: T.ink900 }}>{inv.purpose}</div>
-              <div style={{ padding: '0 16px', fontFamily: 'CKCL', fontSize: 13, textAlign: 'right', color: T.ink900 }}>{fmt(inv.amount)}</div>
-            </div>
+            {/* Invoice lines from the API; a single summary row when the invoice has none */}
+            {(inv.lines.length ? inv.lines : [{ description: inv.purpose, amount: inv.amount }]).map((line, i) => (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 120px', minHeight: 52, alignItems: 'center', borderBottom: `1px solid ${T.ink100}` }}>
+                <div style={{ padding: '0 16px', fontFamily: 'CKCL', fontSize: 13, color: T.ink900 }}>{line.description}</div>
+                <div style={{ padding: '0 16px', fontFamily: 'CKCL', fontSize: 13, textAlign: 'right', color: T.ink900 }}>{fmt(line.amount)}</div>
+              </div>
+            ))}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', height: 48, background: T.surface50, borderTop: `2px solid ${T.ink900}`, alignItems: 'center' }}>
               <div style={{ padding: '0 16px', fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: T.ink900 }}>Total due</div>
               <div style={{ padding: '0 16px', fontFamily: 'CKCL', fontSize: 14, fontWeight: 700, textAlign: 'right', color: T.ink900 }}>{fmt(inv.amount)}</div>
@@ -1641,33 +1889,41 @@ function InvoiceModal({ inv, member, onClose }: { inv: InvoiceModalData; member:
 
 function Invoices({ member }: { member: Member }) {
   const [modalInv, setModalInv] = useState<InvoiceModalData | null>(null)
-  const [tableState, setTableState] = useState<'populated' | 'loading' | 'error'>('populated')
+  const { data, error, loading, reload } = usePortalInvoices('all')
+  const rows = (data ?? []).map((inv, i) => ({
+    id: i + 1,
+    date: prettyDay(inv.issue_date || inv.due_date),
+    purpose: inv.period ? `${inv.type || 'Invoice'} — ${inv.period}` : (inv.invoice_no || 'Invoice'),
+    amount: Number(inv.due_amount ?? inv.total ?? 0),
+    status: invoiceUiStatus(inv),
+    invoiceNo: inv.invoice_no || '',
+    dueDate: inv.due_date ? prettyDay(inv.due_date) : '—',
+    lines: (inv.lines || []).map((l) => ({ description: l.description, amount: Number(l.amount) || 0 })),
+  }))
 
   return (
     <>
       <div className="portal-table-scroll" style={{ background: T.surface0, borderRadius: 14, border: `1px solid ${T.ink100}`, overflow: 'hidden', boxShadow: '0 1px 4px rgba(14,17,22,0.04)' }}>
         <div className="portal-table-inner">
-        {/* Card header */}
         <div style={{ height: 64, padding: '0 20px', borderBottom: `1px solid ${T.ink100}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 17, color: T.ink900 }}>Invoices</span>
           <IconBtn title="Download PDF"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></IconBtn>
         </div>
 
-        {/* Col headers */}
         <div style={{ display: 'grid', gridTemplateColumns: INV_GRID, height: 48, background: T.surface50, borderBottom: `1px solid ${T.ink100}` }}>
           {INV_COLS.map((c, i) => <ColHead key={c} label={c} right={i === 3}/>)}
         </div>
 
-        {tableState === 'loading' && <TableSkeleton cols={INV_GRID}/>}
-        {tableState === 'error' && <TableError onRetry={() => setTableState('populated')}/>}
-        {tableState === 'populated' && INVOICE_DATA.length === 0
+        {loading && <TableSkeleton cols={INV_GRID}/>}
+        {!loading && error && <TableError onRetry={reload}/>}
+        {!loading && !error && rows.length === 0
           ? <TableEmpty
               icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>}
               heading="No invoices yet"
               body="Invoices appear here once the club office raises a charge on your account."
             />
-          : tableState === 'populated' && INVOICE_DATA.map((inv, i) => (
-              <div key={inv.id} style={{ display: 'grid', gridTemplateColumns: INV_GRID, height: 56, borderBottom: i < INVOICE_DATA.length - 1 ? `1px solid ${T.ink100}` : 'none', alignItems: 'center', transition: 'background 120ms' }}
+          : !loading && !error && rows.map((inv, i) => (
+              <div key={inv.id} style={{ display: 'grid', gridTemplateColumns: INV_GRID, height: 56, borderBottom: i < rows.length - 1 ? `1px solid ${T.ink100}` : 'none', alignItems: 'center', transition: 'background 120ms' }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface50 }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
               >
@@ -1692,7 +1948,7 @@ function Invoices({ member }: { member: Member }) {
               </div>
             ))
         }
-        </div>{/* /portal-table-inner */}
+        </div>
       </div>
 
       {modalInv && <InvoiceModal inv={modalInv} member={member} onClose={() => setModalInv(null)}/>}
@@ -1701,16 +1957,11 @@ function Invoices({ member }: { member: Member }) {
 }
 
 // ─── J. Bank Accounts ─────────────────────────────────────────────────────────
-const BANKS = [
-  { name: 'Exim Bank Limited', branch: 'Khulshi Branch', acctNo: '0012300045671234', routingNo: '095261234', logo: 'https://placehold.co/96x32/f7f8fa/5c6673?text=Exim+Bank' },
-  { name: 'One Bank Limited', branch: 'CDA Avenue Branch', acctNo: '0034100023459876', routingNo: '195150987', logo: 'https://placehold.co/96x32/f7f8fa/5c6673?text=One+Bank' },
-  { name: 'BRAC Bank Limited', branch: 'CDA Avenue Branch', acctNo: '1506202011223344', routingNo: '060261122', logo: 'https://placehold.co/96x32/f7f8fa/5c6673?text=BRAC+Bank' },
-  { name: 'Eastern Bank Limited', branch: 'Jamal Khan', acctNo: '1081000056783210', routingNo: '085261007', logo: 'https://placehold.co/96x32/f7f8fa/5c6673?text=Eastern+Bank' },
-  { name: 'Prime Bank Limited', branch: 'Jubilee Road Branch', acctNo: '2131100044557788', routingNo: '235261445', logo: 'https://placehold.co/96x32/f7f8fa/5c6673?text=Prime+Bank' },
-]
-
 function BankAccounts() {
   const [copied, setCopied] = useState<string | null>(null)
+  const { data, error, loading, reload } = usePortalBankAccounts(true)
+  const banks = data?.banks ?? []
+  const beneficiary = data?.account_name || 'Club'
 
   const copy = (val: string, key: string) => {
     navigator.clipboard.writeText(val).catch(() => {})
@@ -1727,29 +1978,41 @@ function BankAccounts() {
 
       {/* Account name note */}
       <div style={{ background: T.surface100, borderRadius: 10, padding: '10px 16px', fontFamily: 'CKCL', fontSize: 13, color: T.ink600 }}>
-        Account name for all transfers: <span style={{ fontWeight: 700, color: T.ink900 }}>Chittagong Khulshi Club Limited</span>
+        Account name for all transfers: <span style={{ fontWeight: 700, color: T.ink900 }}>{beneficiary}</span>
       </div>
+
+      {loading && <div style={{ padding: 24, fontFamily: 'CKCL', color: T.ink400 }}>Loading bank accounts…</div>}
+      {!loading && error && <TableError onRetry={reload}/>}
+      {!loading && !error && banks.length === 0 && (
+        <TableEmpty
+          icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 9l9-6 9 6v13H3z"/><path d="M9 22V12h6v10"/></svg>}
+          heading="No bank accounts listed"
+          body="The club office has not published deposit accounts yet. Please contact the office for transfer details."
+        />
+      )}
 
       {/* Card grid */}
       <div id="bank-accounts-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(300px,100%), 1fr))', gap: 16 }}>
-        {BANKS.map((bank) => (
-          <div key={bank.name} style={{ background: T.surface0, borderRadius: 14, border: `1px solid ${T.ink100}`, padding: 24, display: 'flex', flexDirection: 'column', gap: 16, boxShadow: '0 1px 4px rgba(14,17,22,0.04)' }}>
+        {banks.map((bank) => (
+          <div key={bank.id} style={{ background: T.surface0, borderRadius: 14, border: `1px solid ${T.ink100}`, padding: 24, display: 'flex', flexDirection: 'column', gap: 16, boxShadow: '0 1px 4px rgba(14,17,22,0.04)' }}>
             {/* Logo + name */}
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
-              <div style={{ width: 96, height: 32, flexShrink: 0 }}>
-                <img src={bank.logo} alt={bank.name} style={{ width: 96, height: 32, objectFit: 'contain', objectPosition: 'left center', borderRadius: 4 }}/>
+            {bank.logo_url ? (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+                <div style={{ width: 96, height: 32, flexShrink: 0 }}>
+                  <img src={bank.logo_url} alt={bank.bank_name} style={{ width: 96, height: 32, objectFit: 'contain', objectPosition: 'left center', borderRadius: 4 }}/>
+                </div>
               </div>
-            </div>
+            ) : null}
             <div>
-              <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 16, color: T.ink900 }}>{bank.name}</div>
-              <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>{bank.branch}</div>
+              <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 16, color: T.ink900 }}>{bank.bank_name}</div>
+              <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>{bank.branch_name || '—'}</div>
             </div>
 
             {/* Details */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${T.ink100}`, paddingTop: 14 }}>
               {[
-                { label: 'Account no.', value: bank.acctNo, key: `acct-${bank.name}` },
-                { label: 'Routing no.', value: bank.routingNo, key: `route-${bank.name}` },
+                { label: 'Account no.', value: bank.account_no, key: `acct-${bank.id}` },
+                ...(bank.routing_no ? [{ label: 'Routing no.', value: bank.routing_no, key: `route-${bank.id}` }] : []),
               ].map(({ label, value, key }) => (
                 <div key={key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <div>
@@ -1891,24 +2154,151 @@ function StepIndicator({ step, setStep }: { step: FormStep; setStep: (s: FormSte
   )
 }
 
-function PersonalInfo({ member }: { member: Member }) {
+const PERSONAL_DRAFT_KEY = 'ckcl_personal_info_draft'
+
+function PersonalInfo({ member, onNavigate }: { member: Member; onNavigate?: (p: PortalPage) => void }) {
+  const { data: profile } = usePortalMe(true)
   const [step, setStep] = useState<FormStep>(1)
   const [saved, setSaved] = useState(false)
-  const [marital, setMarital] = useState('Single')
+  const [submitting, setSubmitting] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [marital, setMarital] = useState<'Single' | 'Married'>('Single')
   const [form, setForm] = useState({
-    surname: 'Islam', givenName: 'Rafiqul', fatherName: 'Md. Idris Islam',
-    motherName: 'Begum Fatema', anniversary: '', spouseName: '',
-    profession: 'Business', dob: '1975-08-15', place: 'Chattogram',
+    surname: '', givenName: '', fatherName: '',
+    motherName: '', anniversary: '', spouseName: '',
+    profession: '', dob: '', place: '',
     cell: member.phone, tel: '', email: member.email,
-    nationality: 'Bangladeshi', nid: '1234567890123',
-    passport: 'BK1234567', bloodGroup: 'B+', education: 'MBA',
-    institution: 'University of Chittagong', eTin: '1234567890',
+    nationality: 'Bangladeshi', nid: '',
+    passport: '', bloodGroup: '', education: '',
+    institution: '', eTin: '',
   })
+
+  useEffect(() => {
+    if (!profile) return
+    const parts = String(profile.full_name || '').trim().split(/\s+/)
+    const surname = parts.length > 1 ? parts[parts.length - 1] : ''
+    const givenName = parts.length > 1 ? parts.slice(0, -1).join(' ') : (profile.full_name || '')
+    let draft: Partial<typeof form> & { marital?: string } = {}
+    try {
+      const raw = sessionStorage.getItem(PERSONAL_DRAFT_KEY)
+      if (raw) draft = JSON.parse(raw) as typeof draft
+    } catch { /* ignore */ }
+
+    setForm((f) => ({
+      ...f,
+      surname: String(profile.last_name || surname || f.surname || ''),
+      givenName: String(profile.first_name || givenName || f.givenName || ''),
+      fatherName: String(draft.fatherName ?? profile.father_name ?? f.fatherName ?? ''),
+      motherName: String(draft.motherName ?? profile.mother_name ?? f.motherName ?? ''),
+      anniversary: String(draft.anniversary ?? profile.anniversary_date ?? f.anniversary ?? ''),
+      spouseName: String(draft.spouseName ?? profile.spouse_name ?? f.spouseName ?? ''),
+      profession: String(draft.profession ?? profile.profession ?? f.profession ?? ''),
+      dob: String(draft.dob ?? profile.date_of_birth ?? f.dob ?? ''),
+      place: String(draft.place ?? profile.place_of_birth ?? f.place ?? ''),
+      cell: String(profile.phone || member.phone || f.cell || ''),
+      tel: String(draft.tel ?? profile.alt_phone ?? f.tel ?? ''),
+      email: String(profile.email || member.email || f.email || ''),
+      nationality: String(draft.nationality ?? profile.nationality ?? f.nationality ?? 'Bangladeshi'),
+      nid: String(draft.nid ?? profile.national_id ?? f.nid ?? ''),
+      passport: String(draft.passport ?? profile.passport_no ?? f.passport ?? ''),
+      bloodGroup: String(draft.bloodGroup ?? profile.blood_group ?? f.bloodGroup ?? ''),
+      education: String(draft.education ?? profile.qualification ?? f.education ?? ''),
+      institution: String(draft.institution ?? profile.institute ?? f.institution ?? ''),
+      eTin: String(draft.eTin ?? profile.e_tin_no ?? f.eTin ?? ''),
+    }))
+    const ms = String(draft.marital || profile.marital_status || '').toLowerCase()
+    setMarital(ms === 'married' || Boolean(profile.spouse_name) ? 'Married' : 'Single')
+  }, [profile, member.phone, member.email])
+
   const set = (k: keyof typeof form) => (v: string) => setForm((f) => ({ ...f, [k]: v }))
 
+  const showToast = (msg: string) => {
+    setToast(msg)
+    setTimeout(() => setToast(null), 2800)
+  }
+
   const saveDraft = () => {
+    try {
+      sessionStorage.setItem(PERSONAL_DRAFT_KEY, JSON.stringify({ ...form, marital }))
+    } catch { /* ignore */ }
     setSaved(true)
+    showToast('Draft saved on this device')
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  const buildChanges = (): Record<string, string> => {
+    const current = {
+      father_name: String(profile?.father_name || ''),
+      mother_name: String(profile?.mother_name || ''),
+      marital_status: String(profile?.marital_status || '').toLowerCase() || 'single',
+      anniversary_date: String(profile?.anniversary_date || ''),
+      spouse_name: String(profile?.spouse_name || ''),
+      profession: String(profile?.profession || ''),
+      date_of_birth: String(profile?.date_of_birth || ''),
+      place_of_birth: String(profile?.place_of_birth || ''),
+      alt_phone: String(profile?.alt_phone || ''),
+      nationality: String(profile?.nationality || ''),
+      national_id: String(profile?.national_id || ''),
+      passport_no: String(profile?.passport_no || ''),
+      blood_group: String(profile?.blood_group || ''),
+      qualification: String(profile?.qualification || ''),
+      institute: String(profile?.institute || ''),
+      e_tin_no: String(profile?.e_tin_no || ''),
+    }
+    const next: Record<string, string> = {
+      father_name: form.fatherName.trim(),
+      mother_name: form.motherName.trim(),
+      marital_status: marital.toLowerCase(),
+      anniversary_date: marital === 'Married' ? form.anniversary.trim() : '',
+      spouse_name: marital === 'Married' ? form.spouseName.trim() : '',
+      profession: form.profession.trim(),
+      date_of_birth: form.dob.trim(),
+      place_of_birth: form.place.trim(),
+      alt_phone: form.tel.trim(),
+      nationality: form.nationality.trim(),
+      national_id: form.nid.trim(),
+      passport_no: form.passport.trim(),
+      blood_group: form.bloodGroup.trim(),
+      qualification: form.education.trim(),
+      institute: form.institution.trim(),
+      e_tin_no: form.eTin.trim(),
+    }
+    const changes: Record<string, string> = {}
+    for (const [key, value] of Object.entries(next)) {
+      if (value !== (current as Record<string, string>)[key]) changes[key] = value
+    }
+    return changes
+  }
+
+  const submitChanges = async () => {
+    setError(null)
+    if (form.nid && !/^\d{10}$|^\d{13}$|^\d{17}$/.test(form.nid)) {
+      setError('Enter a valid 10, 13 or 17-digit NID number')
+      setStep(1)
+      return
+    }
+    const changes = buildChanges()
+    if (Object.keys(changes).length === 0) {
+      setError('No changes to submit.')
+      return
+    }
+    setSubmitting(true)
+    try {
+      await submitPortalChangeRequest({
+        request_type: 'profile',
+        changes,
+        reason: 'Member portal personal information update',
+      })
+      try { sessionStorage.removeItem(PERSONAL_DRAFT_KEY) } catch { /* ignore */ }
+      showToast('Request sent to the club office')
+      onNavigate?.('change-request')
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e instanceof Error ? e.message : 'Could not submit request')
+      setError(msg)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -1918,6 +2308,11 @@ function PersonalInfo({ member }: { member: Member }) {
       </div>
 
       <div style={{ padding: '28px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+        {error && (
+          <div style={{ padding: '12px 14px', borderRadius: 10, background: T.brandDim, border: `1px solid rgba(225,11,23,0.25)`, fontFamily: 'CKCL', fontSize: 13, color: T.brand700 }}>
+            {error}
+          </div>
+        )}
         {step === 1 && (
           <>
             <div id="personal-info-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(200px,100%), 1fr))', gap: 16 }}>
@@ -1928,7 +2323,7 @@ function PersonalInfo({ member }: { member: Member }) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 <label style={{ fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: T.ink600 }}>Marital status</label>
                 <div style={{ display: 'flex', gap: 20, height: 44, alignItems: 'center', padding: '0 12px', background: T.surface0, border: `1.5px solid ${T.ink100}`, borderRadius: 9 }}>
-                  {['Single', 'Married'].map((o) => (
+                  {(['Single', 'Married'] as const).map((o) => (
                     <label key={o} style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', fontFamily: 'CKCL', fontSize: 14, color: T.ink900 }}>
                       <input type="radio" name="marital" value={o} checked={marital === o} onChange={() => setMarital(o)} style={{ accentColor: T.brand }}/>
                       {o}
@@ -1955,9 +2350,23 @@ function PersonalInfo({ member }: { member: Member }) {
           </>
         )}
         {step !== 1 && (
-          <div style={{ padding: '40px 0', textAlign: 'center' }}>
-            <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 18, color: T.ink900, marginBottom: 6 }}>Step {step} content</div>
-            <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400 }}>Fields for this step will be configured by the club office.</div>
+          <div style={{ padding: '24px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 16, color: T.ink900 }}>Review & submit</div>
+            <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, lineHeight: 1.55 }}>
+              Your changes are sent to the club office as a change request. Nothing updates on your profile until an admin approves it.
+            </div>
+            {Object.entries(buildChanges()).length === 0 ? (
+              <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>No field changes detected yet. Go back and edit a field first.</div>
+            ) : (
+              <div style={{ border: `1px solid ${T.ink100}`, borderRadius: 12, overflow: 'hidden' }}>
+                {Object.entries(buildChanges()).map(([key, value]) => (
+                  <div key={key} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '10px 14px', borderBottom: `1px solid ${T.ink100}` }}>
+                    <span style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400 }}>{key.replace(/_/g, ' ')}</span>
+                    <span style={{ fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: T.ink900, textAlign: 'right' }}>{value || '—'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1971,15 +2380,23 @@ function PersonalInfo({ member }: { member: Member }) {
           {step > 1 && (
             <button onClick={() => setStep((s) => (s - 1) as FormStep)} style={{ height: 40, padding: '0 18px', borderRadius: 9, border: `1.5px solid ${T.ink100}`, background: 'transparent', fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: T.ink700, cursor: 'pointer' }}>Back</button>
           )}
-          <button onClick={() => { if (step < 4) setStep((s) => (s + 1) as FormStep) }} style={{ height: 40, padding: '0 22px', borderRadius: 9, border: 'none', background: T.brand, fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: '#FFF', cursor: 'pointer' }}>
-            {step === 4 ? 'Submit changes' : 'Next'}
+          <button
+            disabled={submitting}
+            onClick={() => {
+              if (step === 1) setStep(4)
+              else if (step < 4) setStep((s) => Math.min(4, s + 1) as FormStep)
+              else void submitChanges()
+            }}
+            style={{ height: 40, padding: '0 22px', borderRadius: 9, border: 'none', background: submitting ? T.ink200 : T.brand, fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: '#FFF', cursor: submitting ? 'not-allowed' : 'pointer' }}
+          >
+            {step === 4 ? (submitting ? 'Submitting…' : 'Submit changes') : 'Next'}
           </button>
         </div>
       </div>
-      {saved && (
+      {toast && (
         <div className="portal-toast" style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: T.ink900, color: '#FFF', fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, padding: '10px 20px', borderRadius: 999, zIndex: 200, display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 8px 24px rgba(14,17,22,0.20)' }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-          Draft saved
+          {toast}
         </div>
       )}
       <div style={{ padding: '8px 24px 12px', borderTop: `1px solid ${T.ink100}` }}>
@@ -1989,86 +2406,207 @@ function PersonalInfo({ member }: { member: Member }) {
   )
 }
 
+function ChangeRequestsPage({ onNavigate }: { onNavigate: (p: PortalPage) => void }) {
+  const { data, error, loading, reload } = usePortalChangeRequests(true)
+  const rows = Array.isArray(data) ? data : []
+
+  const statusChip = (status: string) => {
+    const s = status.toLowerCase()
+    const cfg = s === 'approved'
+      ? { bg: T.greenDim, color: T.green, label: 'Approved' }
+      : s === 'rejected'
+        ? { bg: T.brandDim, color: T.brand700, label: 'Rejected' }
+        : { bg: T.amberDim, color: T.amber, label: 'Pending' }
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: cfg.bg, color: cfg.color, borderRadius: 999, padding: '3px 10px', fontFamily: 'CKCL', fontSize: 11, fontWeight: 700 }}>
+        {cfg.label}
+      </span>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          onClick={() => onNavigate('personal-info')}
+          style={{ height: 40, padding: '0 16px', borderRadius: 10, border: 'none', background: T.brand, fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: '#FFF', cursor: 'pointer' }}
+        >
+          New request
+        </button>
+      </div>
+      <div style={{ background: T.surface0, borderRadius: 14, border: `1px solid ${T.ink100}`, overflow: 'hidden' }}>
+        {loading && <div style={{ padding: 40, fontFamily: 'CKCL', color: T.ink400 }}>Loading requests…</div>}
+        {!loading && error && <TableError onRetry={reload}/>}
+        {!loading && !error && rows.length === 0 && (
+          <TableEmpty
+            icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>}
+            heading="No change requests yet"
+            body="When you submit personal information updates, they appear here until the club office reviews them."
+            action={<button onClick={() => onNavigate('personal-info')} style={{ height: 36, padding: '0 16px', borderRadius: 8, border: 'none', background: T.brand, fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: '#FFF', cursor: 'pointer' }}>Update personal info</button>}
+          />
+        )}
+        {!loading && !error && rows.map((r, i) => {
+          const fields = Object.keys(r.changes || {})
+          return (
+            <div key={r.id} style={{ padding: '16px 20px', borderBottom: i < rows.length - 1 ? `1px solid ${T.ink100}` : 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900 }}>
+                  {(r.request_type || 'profile').replace(/_/g, ' ')} · {prettyDay(r.created_at)}
+                </div>
+                {statusChip(r.status)}
+              </div>
+              <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink600 }}>
+                {fields.length ? `Fields: ${fields.map((f) => f.replace(/_/g, ' ')).join(', ')}` : 'No field details'}
+              </div>
+              {r.review_remark && (
+                <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400 }}>Office note: {r.review_remark}</div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ─── L. Online Helpdesk ───────────────────────────────────────────────────────
-type TicketStatus = 'Open' | 'Answered' | 'Closed'
-const TICKETS = [
-  { id: 'TKT-0041', subject: 'Due payment not reflecting after transfer', topic: 'Payments & dues', excerpt: "I transferred ৳2,500 on 5 Aug via BRAC Bank but my dashboard still shows it as unpaid. Please verify.", date: '06 Aug 2026', status: 'Open' as TicketStatus, replies: [{ from: 'club', text: 'Thank you for reaching out. We have received your query and will verify the transfer within 1–2 business days.', date: '07 Aug 2026' }] },
-  { id: 'TKT-0039', subject: 'Request for guest house booking', topic: 'Guest house', excerpt: "I would like to book the guest house for the weekend of 15–17 Aug for 2 guests.", date: '01 Aug 2026', status: 'Answered' as TicketStatus, replies: [{ from: 'club', text: 'The guest house is available for your requested dates. Please proceed to the facility booking form to confirm.', date: '02 Aug 2026' }] },
-  { id: 'TKT-0036', subject: 'Membership card not received', topic: 'Membership', excerpt: "It has been 3 months since my card was due for renewal but I have not received a replacement.", date: '10 Jul 2026', status: 'Closed' as TicketStatus, replies: [] },
-]
-const TOPICS = ['Membership', 'Payments & dues', 'Facility booking', 'Guest house', 'Complaint', 'Other']
+type TicketStatusKey = 'open' | 'answered' | 'closed'
+
+function formatHelpdeskDate(iso?: string | null) {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  } catch {
+    return iso
+  }
+}
+
+function statusLabel(status: string): string {
+  const s = String(status || '').toLowerCase()
+  if (s === 'answered') return 'Answered'
+  if (s === 'closed') return 'Closed'
+  return 'Open'
+}
 
 function Helpdesk() {
   const site = useSiteInfo()
-  const [thread, setThread] = useState<typeof TICKETS[0] | null>(null)
+  const { data, error, loading, reload } = usePortalHelpdesk(true)
+  const tickets = data?.tickets || []
+  const topics = (data?.topics?.length ? data.topics : []) as string[]
+
+  const [thread, setThread] = useState<PortalHelpdeskTicket | null>(null)
   const [topic, setTopic] = useState('')
   const [subject, setSubject] = useState('')
   const [message, setMessage] = useState('')
   const [sent, setSent] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [formError, setFormError] = useState('')
+  const [replyText, setReplyText] = useState('')
+  const [replyBusy, setReplyBusy] = useState(false)
+  const [replyError, setReplyError] = useState('')
 
-  const statusCfg: Record<TicketStatus, { bg: string; color: string }> = {
-    Open: { bg: T.amberDim, color: T.amber },
-    Answered: { bg: T.surface100, color: T.ink600 },
-    Closed: { bg: T.greenDim, color: T.green },
+  const statusCfg: Record<TicketStatusKey, { bg: string; color: string }> = {
+    open: { bg: T.amberDim, color: T.amber },
+    answered: { bg: T.surface100, color: T.ink600 },
+    closed: { bg: T.greenDim, color: T.green },
   }
 
-  const handleSend = (e: React.FormEvent) => {
+  const statusStyle = (status: string) => statusCfg[(String(status).toLowerCase() as TicketStatusKey)] || statusCfg.open
+
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!topic || !subject || !message) return
-    setSent(true)
-    setTopic(''); setSubject(''); setMessage('')
-    setTimeout(() => setSent(false), 3000)
+    if (!topic || !subject.trim() || !message.trim()) return
+    setSending(true)
+    setFormError('')
+    try {
+      await createPortalHelpdeskTicket({ topic, subject: subject.trim(), message: message.trim() })
+      setSent(true)
+      setTopic('')
+      setSubject('')
+      setMessage('')
+      reload()
+      window.setTimeout(() => setSent(false), 3000)
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : (err instanceof Error ? err.message : 'Could not send request.'))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const handleReply = async () => {
+    if (!thread || !replyText.trim()) return
+    setReplyBusy(true)
+    setReplyError('')
+    try {
+      const updated = await replyPortalHelpdeskTicket(thread.id, replyText.trim())
+      setThread(updated)
+      setReplyText('')
+      reload()
+    } catch (err) {
+      setReplyError(err instanceof ApiError ? err.message : (err instanceof Error ? err.message : 'Could not send reply.'))
+    } finally {
+      setReplyBusy(false)
+    }
   }
 
   return (
     <>
-      {/* Urgent callout */}
       <div style={{ background: T.surface100, borderRadius: 10, padding: '10px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.ink400} strokeWidth="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8 19.79 19.79 0 01.1 1.18 2 2 0 012.11 0h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.91 7.09a16 16 0 006 6l.45-.45a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 14.92"/></svg>
         <span style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink600 }}>For urgent matters call <strong>{site.contact.phone}</strong>{site.office.hours ? `, ${site.office.hours}` : ''}.</span>
       </div>
 
+      {error && (
+        <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 10, background: T.brandDim, fontFamily: 'CKCL', fontSize: 13, color: T.brand }}>
+          {error}{' '}
+          <button type="button" onClick={() => reload()} style={{ background: 'none', border: 'none', color: T.brand, fontWeight: 700, cursor: 'pointer', fontFamily: 'CKCL' }}>Retry</button>
+        </div>
+      )}
+
       <div id="helpdesk-grid" style={{ display: 'grid', gridTemplateColumns: '7fr 5fr', gap: 20, alignItems: 'start' }}>
-        {/* Left: ticket list */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 0, background: T.surface0, borderRadius: 14, border: `1px solid ${T.ink100}`, overflow: 'hidden' }}>
           <div style={{ height: 56, padding: '0 20px', borderBottom: `1px solid ${T.ink100}`, display: 'flex', alignItems: 'center' }}>
             <span style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 16, color: T.ink900 }}>My requests</span>
           </div>
 
-          {TICKETS.length === 0
-            ? <TableEmpty
-                icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>}
-                heading="No requests yet"
-                body="You haven't raised any requests. Use the form to get in touch with the club office."
-              />
-            : TICKETS.map((t, i) => (
-                <div
-                  key={t.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setThread(t)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setThread(t) }}
-                  style={{ padding: '16px 20px', borderBottom: i < TICKETS.length - 1 ? `1px solid ${T.ink100}` : 'none', background: 'transparent', cursor: 'pointer', transition: 'background 120ms', userSelect: 'none' }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface50 }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200 }}>{t.id}</span>
-                      <span onClick={(e) => e.stopPropagation()}><CopyBtn value={t.id} id={`tkt-${t.id}`} size={20}/></span>
-                      <span style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 600, color: T.ink400, background: T.surface100, borderRadius: 999, padding: '2px 8px' }}>{t.topic}</span>
+          {loading && tickets.length === 0
+            ? <div style={{ padding: 28, fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>Loading requests…</div>
+            : tickets.length === 0
+              ? <TableEmpty
+                  icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>}
+                  heading="No requests yet"
+                  body="You haven't raised any requests. Use the form to get in touch with the club office."
+                />
+              : tickets.map((t, i) => {
+                  const st = statusStyle(t.status)
+                  return (
+                    <div
+                      key={t.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => { setThread(t); setReplyText(''); setReplyError('') }}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { setThread(t); setReplyText(''); setReplyError('') } }}
+                      style={{ padding: '16px 20px', borderBottom: i < tickets.length - 1 ? `1px solid ${T.ink100}` : 'none', background: 'transparent', cursor: 'pointer', transition: 'background 120ms', userSelect: 'none' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface50 }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200 }}>{t.ticket_no}</span>
+                          <span onClick={(e) => e.stopPropagation()}><CopyBtn value={t.ticket_no} id={`tkt-${t.id}`} size={20}/></span>
+                          <span style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 600, color: T.ink400, background: T.surface100, borderRadius: 999, padding: '2px 8px' }}>{t.topic}</span>
+                        </div>
+                        <span style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 700, color: st.color, background: st.bg, borderRadius: 999, padding: '3px 8px', flexShrink: 0 }}>{statusLabel(t.status)}</span>
+                      </div>
+                      <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900, marginBottom: 4 }}>{t.subject}</div>
+                      <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.message}</div>
+                      <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, marginTop: 6 }}>{formatHelpdeskDate(t.created_at)}</div>
                     </div>
-                    <span style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 700, color: statusCfg[t.status].color, background: statusCfg[t.status].bg, borderRadius: 999, padding: '3px 8px', flexShrink: 0 }}>{t.status}</span>
-                  </div>
-                  <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900, marginBottom: 4 }}>{t.subject}</div>
-                  <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.excerpt}</div>
-                  <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, marginTop: 6 }}>{t.date}</div>
-                </div>
-              ))
+                  )
+                })
           }
         </div>
 
-        {/* Right: new request */}
         <div style={{ background: T.surface0, borderRadius: 14, border: `1px solid ${T.ink100}`, overflow: 'hidden', position: 'sticky', top: 80 }}>
           <div style={{ height: 56, padding: '0 20px', borderBottom: `1px solid ${T.ink100}`, display: 'flex', alignItems: 'center' }}>
             <span style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 16, color: T.ink900 }}>New request</span>
@@ -2079,73 +2617,77 @@ function Helpdesk() {
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 </div>
                 <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 16, color: T.ink900 }}>Request sent!</div>
-                <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>The club office will respond within 2 business days.</div>
+                <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>{site.helpdesk_reply_note || 'The club office will reply here soon.'}</div>
               </div>
-            : <form onSubmit={handleSend} style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            : <form onSubmit={(e) => { void handleSend(e) }} style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                   <label style={{ fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: T.ink600 }}>Topic <span style={{ color: T.brand }}>*</span></label>
-                  <select value={topic} onChange={(e) => setTopic(e.target.value)} required style={{ height: 44, padding: '0 12px', appearance: 'none', fontFamily: 'CKCL', fontSize: 14, color: topic ? T.ink900 : T.ink200, background: T.surface0, border: `1.5px solid ${T.ink100}`, borderRadius: 9, outline: 'none', cursor: 'pointer' }}>
-                    <option value="">Select topic…</option>
-                    {TOPICS.map((t) => <option key={t} value={t}>{t}</option>)}
-                  </select>
+                  {topics.length === 0 ? (
+                    <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400, padding: '10px 0' }}>
+                      {loading ? 'Loading topics…' : 'No helpdesk topics available from the club yet.'}
+                    </div>
+                  ) : (
+                    <select value={topic} onChange={(e) => setTopic(e.target.value)} required style={{ height: 44, padding: '0 12px', appearance: 'none', fontFamily: 'CKCL', fontSize: 14, color: topic ? T.ink900 : T.ink200, background: T.surface0, border: `1.5px solid ${T.ink100}`, borderRadius: 9, outline: 'none', cursor: 'pointer' }}>
+                      <option value="">Select topic…</option>
+                      {topics.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  )}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                   <label style={{ fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: T.ink600 }}>Subject</label>
-                  <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Brief subject…" style={{ height: 44, padding: '0 12px', fontFamily: 'CKCL', fontSize: 14, color: T.ink900, background: T.surface0, border: `1.5px solid ${T.ink100}`, borderRadius: 9, outline: 'none' }}/>
+                  <input value={subject} onChange={(e) => setSubject(e.target.value)} required placeholder="Brief subject…" style={{ height: 44, padding: '0 12px', fontFamily: 'CKCL', fontSize: 14, color: T.ink900, background: T.surface0, border: `1.5px solid ${T.ink100}`, borderRadius: 9, outline: 'none' }}/>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <label style={{ fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: T.ink600 }}>Message</label>
                     <span style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200 }}>{message.length}/1000</span>
                   </div>
-                  <textarea value={message} onChange={(e) => setMessage(e.target.value.slice(0, 1000))} placeholder="Describe your request in detail…" rows={6} style={{ padding: '10px 12px', fontFamily: 'CKCL', fontSize: 14, color: T.ink900, background: T.surface0, border: `1.5px solid ${T.ink100}`, borderRadius: 9, outline: 'none', resize: 'vertical', lineHeight: 1.6 }}/>
+                  <textarea value={message} onChange={(e) => setMessage(e.target.value.slice(0, 1000))} required placeholder="Describe your request in detail…" rows={6} style={{ padding: '10px 12px', fontFamily: 'CKCL', fontSize: 14, color: T.ink900, background: T.surface0, border: `1.5px solid ${T.ink100}`, borderRadius: 9, outline: 'none', resize: 'vertical', lineHeight: 1.6 }}/>
                 </div>
-                <div style={{ border: `1.5px dashed ${T.ink100}`, borderRadius: 9, padding: '14px 12px', textAlign: 'center', cursor: 'pointer' }}>
-                  <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>Drop attachment here or <span style={{ color: T.brand, fontWeight: 600 }}>browse</span></div>
-                </div>
-                <button type="submit" style={{ height: 44, borderRadius: 9, border: 'none', background: T.brand, fontFamily: 'CKCL', fontSize: 14, fontWeight: 700, color: '#FFF', cursor: 'pointer', transition: 'background 160ms' }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.brand700 }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = T.brand }}
-                >
-                  Send request
+                {formError && <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.brand }}>{formError}</div>}
+                <button type="submit" disabled={sending || topics.length === 0} style={{ height: 44, borderRadius: 9, border: 'none', background: sending || topics.length === 0 ? '#B70813' : T.brand, fontFamily: 'CKCL', fontSize: 14, fontWeight: 700, color: '#FFF', cursor: sending || topics.length === 0 ? 'default' : 'pointer', opacity: topics.length === 0 ? 0.55 : 1 }}>
+                  {sending ? 'Sending…' : 'Send request'}
                 </button>
               </form>
           }
         </div>
       </div>
 
-      {/* Thread modal */}
       {thread && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(14,17,22,0.60)', backdropFilter: 'blur(8px)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }} onClick={() => setThread(null)}>
           <div style={{ background: T.surface0, borderRadius: 20, width: '100%', maxWidth: 600, maxHeight: '85vh', overflow: 'auto', boxShadow: '0 24px 64px rgba(14,17,22,0.20)' }} onClick={(e) => e.stopPropagation()}>
             <div style={{ padding: '20px 24px', borderBottom: `1px solid ${T.ink100}`, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink200 }}>{thread.id}</span>
-                  <span style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 700, color: statusCfg[thread.status].color, background: statusCfg[thread.status].bg, borderRadius: 999, padding: '2px 8px' }}>{thread.status}</span>
+                  <span style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink200 }}>{thread.ticket_no}</span>
+                  <span style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 700, color: statusStyle(thread.status).color, background: statusStyle(thread.status).bg, borderRadius: 999, padding: '2px 8px' }}>{statusLabel(thread.status)}</span>
                 </div>
                 <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 16, color: T.ink900 }}>{thread.subject}</div>
               </div>
-              <button onClick={() => setThread(null)} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${T.ink100}`, background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.ink400, flexShrink: 0 }}>
+              <button type="button" onClick={() => setThread(null)} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${T.ink100}`, background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.ink400, flexShrink: 0 }}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
             <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {/* Original message */}
               <div style={{ background: T.surface100, borderRadius: 10, padding: '14px 16px' }}>
-                <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink400, marginBottom: 6 }}>Your message · {thread.date}</div>
-                <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink900, lineHeight: 1.7 }}>{thread.excerpt}</div>
+                <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink400, marginBottom: 6 }}>Your message · {formatHelpdeskDate(thread.created_at)}</div>
+                <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink900, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{thread.message}</div>
               </div>
-              {thread.replies.map((r, i) => (
-                <div key={i} style={{ background: T.brandDim, borderRadius: 10, padding: '14px 16px' }}>
-                  <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.brand, marginBottom: 6, fontWeight: 600 }}>Club office · {r.date}</div>
-                  <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink900, lineHeight: 1.7 }}>{r.text}</div>
+              {(thread.replies || []).map((r) => (
+                <div key={r.id} style={{ background: r.from === 'club' ? T.brandDim : T.surface100, borderRadius: 10, padding: '14px 16px' }}>
+                  <div style={{ fontFamily: 'CKCL', fontSize: 11, color: r.from === 'club' ? T.brand : T.ink400, marginBottom: 6, fontWeight: 600 }}>
+                    {r.from === 'club' ? 'Club office' : 'You'} · {formatHelpdeskDate(r.date)}
+                  </div>
+                  <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink900, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{r.text}</div>
                 </div>
               ))}
-              {thread.status !== 'Closed' && (
+              {String(thread.status).toLowerCase() !== 'closed' && (
                 <div style={{ marginTop: 4 }}>
-                  <textarea placeholder="Reply…" rows={3} style={{ width: '100%', padding: '10px 12px', fontFamily: 'CKCL', fontSize: 13, color: T.ink900, border: `1.5px solid ${T.ink100}`, borderRadius: 9, outline: 'none', resize: 'none', boxSizing: 'border-box' as const }}/>
-                  <button style={{ marginTop: 8, height: 40, padding: '0 20px', borderRadius: 9, border: 'none', background: T.brand, fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: '#FFF', cursor: 'pointer' }}>Send reply</button>
+                  <textarea value={replyText} onChange={(e) => setReplyText(e.target.value)} placeholder="Reply…" rows={3} style={{ width: '100%', padding: '10px 12px', fontFamily: 'CKCL', fontSize: 13, color: T.ink900, border: `1.5px solid ${T.ink100}`, borderRadius: 9, outline: 'none', resize: 'none', boxSizing: 'border-box' as const }}/>
+                  {replyError && <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.brand, marginTop: 6 }}>{replyError}</div>}
+                  <button type="button" disabled={replyBusy || !replyText.trim()} onClick={() => { void handleReply() }} style={{ marginTop: 8, height: 40, padding: '0 20px', borderRadius: 9, border: 'none', background: T.brand, fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: '#FFF', cursor: 'pointer', opacity: replyBusy || !replyText.trim() ? 0.7 : 1 }}>
+                    {replyBusy ? 'Sending…' : 'Send reply'}
+                  </button>
                 </div>
               )}
             </div>
@@ -2163,6 +2705,8 @@ function ChangePassword() {
   const [confirm, setConfirm] = useState('')
   const [show, setShow] = useState({ current: false, new: false, confirm: false })
   const [done, setDone] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [formError, setFormError] = useState('')
 
   const reqs = [
     { label: 'At least 8 characters', met: newPw.length >= 8 },
@@ -2242,14 +2786,29 @@ function ChangePassword() {
         </div>
       )}
 
+      {formError && (
+        <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.brand, background: T.brandDim, borderRadius: 10, padding: '10px 12px' }}>{formError}</div>
+      )}
       <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
         <button style={{ flex: 1, height: 46, borderRadius: 10, border: `1.5px solid ${T.ink100}`, background: 'transparent', fontFamily: 'CKCL', fontSize: 14, fontWeight: 600, color: T.ink600, cursor: 'pointer' }}>Cancel</button>
         <button
-          onClick={() => { if (current && strength === 4 && newPw === confirm) setDone(true) }}
-          disabled={!current || strength < 4 || newPw !== confirm}
-          style={{ flex: 2, height: 46, borderRadius: 10, border: 'none', background: (!current || strength < 4 || newPw !== confirm) ? T.surface100 : T.brand, fontFamily: 'CKCL', fontSize: 14, fontWeight: 700, color: (!current || strength < 4 || newPw !== confirm) ? T.ink200 : '#FFF', cursor: (!current || strength < 4 || newPw !== confirm) ? 'not-allowed' : 'pointer', transition: 'all 160ms' }}
+          onClick={async () => {
+            if (!(current && strength === 4 && newPw === confirm) || busy) return
+            setBusy(true); setFormError('')
+            try {
+              await changePortalPassword(current, newPw, confirm)
+              setDone(true)
+              setCurrent(''); setNewPw(''); setConfirm('')
+            } catch (e) {
+              setFormError(e instanceof Error ? e.message : 'Could not update password.')
+            } finally {
+              setBusy(false)
+            }
+          }}
+          disabled={!current || strength < 4 || newPw !== confirm || busy}
+          style={{ flex: 2, height: 46, borderRadius: 10, border: 'none', background: (!current || strength < 4 || newPw !== confirm || busy) ? T.surface100 : T.brand, fontFamily: 'CKCL', fontSize: 14, fontWeight: 700, color: (!current || strength < 4 || newPw !== confirm || busy) ? T.ink200 : '#FFF', cursor: (!current || strength < 4 || newPw !== confirm || busy) ? 'not-allowed' : 'pointer', transition: 'all 160ms' }}
         >
-          Update password
+          {busy ? 'Updating…' : 'Update password'}
         </button>
       </div>
     </div>
@@ -2403,27 +2962,111 @@ function PortalTabBar({ activePage, onNavigate }: {
   )
 }
 
+function NotificationBell({ onNavigate }: { onNavigate: (p: PortalPage) => void }) {
+  const [open, setOpen] = useState(false)
+  const { data, loading, reload } = usePortalNotifications(true)
+  const items = data?.data || []
+  const unread = Number(data?.unread_count || 0)
+
+  const openItem = async (n: PortalNotification) => {
+    try { await markPortalNotificationRead(n.id) } catch { /* ignore */ }
+    reload()
+    setOpen(false)
+    const href = n.href || ''
+    if (href.includes('invoices')) onNavigate('invoices')
+    else if (href.includes('payment')) onNavigate('payment-history')
+    else if (href.includes('helpdesk')) onNavigate('helpdesk')
+    else if (href.includes('account-statement')) onNavigate('account-statement')
+    else onNavigate('dashboard')
+  }
+
+  return (
+    <div style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        aria-label="Notifications"
+        onClick={() => setOpen((v) => !v)}
+        style={{ position: 'relative', width: 40, height: 40, borderRadius: '50%', background: open ? T.surface100 : 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.ink600 }}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+        {unread > 0 && <span style={{ position: 'absolute', top: 8, right: 9, width: 8, height: 8, borderRadius: '50%', background: T.brand, border: '2px solid white' }}/>}
+      </button>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 80 }} onClick={() => setOpen(false)}/>
+          <div style={{ position: 'absolute', right: 0, top: 48, width: 360, maxWidth: 'calc(100vw - 24px)', background: T.surface0, border: `1px solid ${T.ink100}`, borderRadius: 16, boxShadow: '0 16px 40px rgba(14,17,22,0.14)', zIndex: 90, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderBottom: `1px solid ${T.ink100}` }}>
+              <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 15, color: T.ink900 }}>Notifications</div>
+              {unread > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => { try { await markAllPortalNotificationsRead(); reload() } catch { /* ignore */ } }}
+                  style={{ fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: T.brand, background: 'none', border: 'none', cursor: 'pointer' }}
+                >
+                  Mark all read
+                </button>
+              )}
+            </div>
+            <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+              {loading && <div style={{ padding: 20, fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>Loading…</div>}
+              {!loading && items.length === 0 && <div style={{ padding: 20, fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>No notifications yet.</div>}
+              {items.map((n) => (
+                <button
+                  key={n.id}
+                  type="button"
+                  onClick={() => void openItem(n)}
+                  style={{ width: '100%', textAlign: 'left', padding: '12px 16px', border: 'none', borderBottom: `1px solid ${T.ink100}`, background: n.read_at ? T.surface0 : T.brandDim, cursor: 'pointer' }}
+                >
+                  <div style={{ fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: T.ink900 }}>{n.title}</div>
+                  {n.body && <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 3 }}>{n.body}</div>}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function MemberPortalPage({
-  memberNo, onLogout, onNavigate,
+  memberNo, activePage: activePageProp = 'dashboard', onPortalNavigate, onLogout, onNavigate,
 }: {
-  memberNo: string; onLogout: () => void; onNavigate: (p: string) => void
+  memberNo: string
+  activePage?: PortalPage
+  onPortalNavigate?: (p: PortalPage) => void
+  onLogout: () => void | Promise<void>
+  onNavigate: (p: string) => void
 }) {
-  const [activePage, setActivePage] = useState<PortalPage>('dashboard')
-  const member = { ...MOCK_MEMBER, memberNo }
+  const [activePageLocal, setActivePageLocal] = useState<PortalPage>(activePageProp)
+  const activePage = onPortalNavigate ? activePageProp : activePageLocal
+  const dash = usePortalDashboard(true)
+  const me = usePortalMe(true)
+  const profile = me.data || dash.data?.member || null
+  const outstanding = Number(dash.data?.total_due ?? 0)
+  const member = useMemo(
+    () => mapMemberFromApi(profile, outstanding, memberNo),
+    [profile, outstanding, memberNo],
+  )
   const meta = PAGE_META[activePage]
 
-  const navigate = (p: PortalPage) => setActivePage(p)
+  const navigate = (p: PortalPage) => {
+    if (onPortalNavigate) onPortalNavigate(p)
+    else setActivePageLocal(p)
+  }
 
   // Services is the phone/tablet menu; the desktop sidebar covers it, so leave it when widening
   useEffect(() => {
     const mq = window.matchMedia('(min-width:1024px)')
-    const onChange = () => { if (mq.matches) setActivePage((p) => (p === 'services' ? 'dashboard' : p)) }
+    const onChange = () => {
+      if (mq.matches && activePage === 'services') navigate('dashboard')
+    }
     onChange()
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePage])
 
-  const overdueTotal = DUES.filter((d) => d.status === 'Overdue').reduce((s, d) => s + d.amount, 0)
+  const overdueTotal = outstanding
 
   return (
     <div style={{ minHeight: '100vh', background: T.surface50, fontFamily: 'CKCL' }}>
@@ -2527,7 +3170,7 @@ export default function MemberPortalPage({
       <header style={{ position: 'sticky', top: 0, zIndex: 50, height: HEADER_H, background: T.surface0, borderBottom: `1px solid ${T.ink100}` }}>
         <div style={{ maxWidth: 1440, height: '100%', margin: '0 auto', padding: '0 clamp(16px,2.5vw,32px)', display: 'flex', alignItems: 'center', gap: 12 }}>
           <button onClick={() => onNavigate('home')} style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-            <img src={logoImg} alt="Chittagong Khulshi Club Ltd." style={{ height: 32, width: 'auto', objectFit: 'contain' }}/>
+            <ClubLogo height={32} />
           </button>
           <div style={{ flex: 1 }}/>
 
@@ -2543,16 +3186,7 @@ export default function MemberPortalPage({
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           </button>
 
-          {/* Bell */}
-          <button
-            aria-label="Notifications"
-            style={{ position: 'relative', width: 40, height: 40, borderRadius: '50%', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.ink600, flexShrink: 0 }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface100 }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
-            <span style={{ position: 'absolute', top: 8, right: 9, width: 8, height: 8, borderRadius: '50%', background: T.brand, border: '2px solid white' }}/>
-          </button>
+          <NotificationBell onNavigate={navigate}/>
 
           {/* Avatar pill + dropdown */}
           <AvatarDropdown member={member} onNavigate={navigate} onLogout={onLogout}/>
@@ -2578,35 +3212,33 @@ export default function MemberPortalPage({
           style={{ minWidth: 0, padding: '24px clamp(16px,2.5vw,32px)' }}
         >
           {activePage !== 'dashboard' && activePage !== 'membership-card' && (
-            <PageHeader
-              breadcrumb={meta.breadcrumb}
-              title={meta.title}
-              action={activePage === 'account-statement' ? (
-                <button style={{ height: 40, padding: '0 18px', borderRadius: 10, border: `1.5px solid ${T.ink100}`, background: T.surface0, fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: T.ink700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  Download PDF
-                </button>
-              ) : undefined}
-            />
+            <PageHeader breadcrumb={meta.breadcrumb} title={meta.title}/>
           )}
-          {activePage === 'dashboard' && <Dashboard member={member} onNavigate={navigate}/>}
+          {activePage === 'dashboard' && (
+            dash.loading
+              ? <div style={{ padding: 40, fontFamily: 'CKCL', color: T.ink400 }}>Loading dashboard…</div>
+              : dash.error && !dash.data
+                ? <div style={{ padding: 40, fontFamily: 'CKCL', color: T.brand700 }}>{dash.error}</div>
+                : <Dashboard member={member} onNavigate={navigate} outstanding={outstanding} notices={Array.isArray(dash.data?.notices) ? dash.data!.notices : undefined} nextDueDate={dash.data?.next_due_date} overdueCount={Number(dash.data?.overdue_invoices || 0)}/>
+          )}
           {activePage === 'membership-card' && <MembershipCardView member={member} onNavigate={navigate}/>}
           {activePage === 'account-statement' && <AccountStatement/>}
           {activePage === 'payment-history' && <PaymentHistory/>}
           {activePage === 'invoices' && <Invoices member={member}/>}
           {activePage === 'bank-accounts' && <BankAccounts/>}
-          {activePage === 'personal-info' && <PersonalInfo member={member}/>}
+          {activePage === 'personal-info' && <PersonalInfo member={member} onNavigate={navigate}/>}
+          {activePage === 'change-request' && <ChangeRequestsPage onNavigate={navigate}/>}
           {activePage === 'helpdesk' && <Helpdesk/>}
           {activePage === 'change-password' && <ChangePassword/>}
           {activePage === 'services' && <Services onNavigate={navigate} onLogout={onLogout}/>}
-          {!['dashboard','membership-card','account-statement','payment-history','invoices','bank-accounts','personal-info','helpdesk','change-password','services'].includes(activePage) && <PlaceholderPage title={meta.title}/>}
+          {!['dashboard','membership-card','account-statement','payment-history','invoices','bank-accounts','personal-info','change-request','helpdesk','change-password','services'].includes(activePage) && <PlaceholderPage title={meta.title}/>}
         </main>
       </div>
 
       {/* Mobile sticky pay bar */}
       {activePage === 'dashboard' && overdueTotal > 0 && (
         <div id="mobile-pay-bar" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 60, padding: '12px 16px', background: 'rgba(255,255,255,0.88)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderTop: `1px solid ${T.ink100}`, boxShadow: '0 -4px 20px rgba(14,17,22,0.08)' }}>
-          <button onClick={() => setActivePage('account-statement')} style={{ width: '100%', height: 50, borderRadius: 12, border: 'none', background: T.brand, fontFamily: 'CKCL', fontSize: 15, fontWeight: 700, color: '#FFF', cursor: 'pointer' }}>
+          <button onClick={() => navigate('account-statement')} style={{ width: '100%', height: 50, borderRadius: 12, border: 'none', background: T.brand, fontFamily: 'CKCL', fontSize: 15, fontWeight: 700, color: '#FFF', cursor: 'pointer' }}>
             Pay ৳{overdueTotal.toLocaleString()}
           </button>
         </div>

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import logoImg from '@/imports/logo-1.png'
-import { MEMBERSHIP_CATEGORIES, type Address, type ApplicantRecord } from '../data/application'
+import { type Address, type ApplicantRecord } from '../data/application'
+import { usePortalClubSettings } from '../lib/apply'
+import { useSiteInfo } from '../lib/siteInfo'
+import ClubLogo from './ClubLogo'
 
 // ─── Membership form as a printable A4 document ───────────────────────────────
 // Mirrors the club's paper form. Print / Save as PDF uses the browser's print
@@ -97,6 +99,7 @@ function Banner({ title }: { title: string }) {
 }
 
 function Page({ n, total, header, children }: { n: number; total: number; header?: React.ReactNode; children: React.ReactNode }) {
+  const site = useSiteInfo()
   return (
     <div className="pdf-page" style={{ width: PAGE_W, background: '#FFFFFF', color: INK, fontFamily: FONT, fontSize: 14, lineHeight: 1.45, height: PAGE_H, overflow: 'hidden', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.35)' }}>
       {/* Thin accent rule across the top of every page */}
@@ -105,7 +108,7 @@ function Page({ n, total, header, children }: { n: number; total: number; header
       {/* Grid, not flex: the answer boxes must not stretch to fill the page height */}
       <div style={{ flex: 1, display: 'grid', alignContent: 'start', gap: 10, padding: `${header ? 20 : 36}px ${PAD_X}px 0` }}>{children}</div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: '#777', margin: `20px ${PAD_X}px 0`, padding: '10px 0 22px', borderTop: `1px solid ${FILL}` }}>
-        <span>Chittagong Khulshi Club Ltd. · Membership Form</span>
+        <span>{site.club_name ? `${site.club_name} · ` : ''}Membership Form</span>
         <span>Page {n} of {total}</span>
       </div>
     </div>
@@ -121,6 +124,13 @@ function FormPages({ record }: { record: ApplicantRecord }) {
   const clubs = pad(f.otherClubs, { name: '', type: '', year: '' })
   const dated = fmtDate(record.submittedAt || new Date().toISOString())
   const total = 4
+  // Header contact + address come from Website Maintenance → Site info.
+  const site = useSiteInfo()
+  const contactLine = [site.contact.phone, site.contact.phone_alt].filter(Boolean).join(', ')
+  // Category list = the club's active membership types (club-portal/settings).
+  const { data: settings } = usePortalClubSettings()
+  const categories = (settings?.membership_types || []).map((t) => ({ id: t.id, name: t.name }))
+  if (categories.length === 0 && f.category) categories.push({ id: f.membership_type_id, name: f.category })
   const blank = (minWidth: number) => <span style={{ display: 'inline-block', minWidth, height: 22, verticalAlign: 'bottom', background: FILL, borderRadius: 2 }}>&nbsp;</span>
   const sign = (label: string) => (
     <div style={{ flex: 1, paddingTop: 44 }}>
@@ -135,16 +145,16 @@ function FormPages({ record }: { record: ApplicantRecord }) {
         n={1} total={total}
         header={<>
           <div style={{ padding: `18px ${PAD_X}px 16px` }}>
-            <img src={logoImg} alt="Chittagong Khulshi Club Ltd." style={{ height: 58, width: 'auto', display: 'block' }}/>
+            <ClubLogo height={58} />
           </div>
           <Banner title="MEMBERSHIP FORM"/>
         </>}
       >
         <div style={{ display: 'flex', gap: 24, alignItems: 'stretch' }}>
           <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '92px 1fr', alignContent: 'center', gap: '8px 10px', fontSize: 12.5, lineHeight: 1.45 }}>
-            <span style={{ color: LABEL }}>Govt. Reg No</span><span style={{ fontWeight: 700 }}>CH-10511/13</span>
-            <span style={{ color: LABEL }}>Address</span><span style={{ fontWeight: 700 }}>Holding No - 1471/2184/1, Concord Amusement Park Road, Opposite of Ansar Sadar Doptor, Foy'slake, Khulshi, Chattogram, Bangladesh.</span>
-            <span style={{ color: LABEL }}>Contact</span><span style={{ fontWeight: 700 }}>+88019 88 896 906, +88019 70 896 905</span>
+            {site.govt_reg_no && <><span style={{ color: LABEL }}>Govt. Reg No</span><span style={{ fontWeight: 700 }}>{site.govt_reg_no}</span></>}
+            {site.address.full && <><span style={{ color: LABEL }}>Address</span><span style={{ fontWeight: 700 }}>{site.address.full}</span></>}
+            {contactLine && <><span style={{ color: LABEL }}>Contact</span><span style={{ fontWeight: 700 }}>{contactLine}</span></>}
           </div>
           {/* Photo box */}
           <div style={{ width: 112, height: 140, background: FILL, border: `1px dashed #A8B0BB`, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', fontSize: 11, color: '#5C6673', padding: p.photo ? 0 : 8, boxSizing: 'border-box', overflow: 'hidden' }}>
@@ -215,9 +225,9 @@ function FormPages({ record }: { record: ApplicantRecord }) {
 
         <Heading>CATEGORY OF MEMBERSHIP</Heading>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-          {MEMBERSHIP_CATEGORIES.map((c) => (
-            <div key={c} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: FILL, borderRadius: 2, padding: '6px 10px', fontWeight: 700, fontSize: 12.5 }}>
-              <Tick on={f.category === c} label={c}/>
+          {categories.map((c) => (
+            <div key={c.id || c.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: FILL, borderRadius: 2, padding: '6px 10px', fontWeight: 700, fontSize: 12.5 }}>
+              <Tick on={f.membership_type_id ? f.membership_type_id === c.id : f.category === c.name} label={c.name}/>
             </div>
           ))}
         </div>
@@ -229,7 +239,7 @@ function FormPages({ record }: { record: ApplicantRecord }) {
           rows={clubs.map((c, i) => [String(i + 1), c.name, c.type, c.year])}
         />
 
-        <Heading>PROPOSED BY (ANY MEMBER OF CKCL)</Heading>
+        <Heading>{(site.short_name || site.club_name) ? `PROPOSED BY (ANY MEMBER OF ${(site.short_name || site.club_name).toUpperCase()})` : 'PROPOSED BY (ANY CLUB MEMBER)'}</Heading>
         <Line label="Name" value={f.proposer.name}/>
         <Pair><Line label="Membership ID" value={f.proposer.memberId}/><Line label="Signature" value="" labelW={92}/></Pair>
       </Page>
@@ -253,8 +263,8 @@ function FormPages({ record }: { record: ApplicantRecord }) {
           <div style={{ marginTop: 6 }}>Thank you</div>
         </div>
         <div style={{ display: 'flex', gap: 80 }}>
-          {sign('President, Chittagong Khulshi Club Limited')}
-          {sign('Vice President, Chittagong Khulshi Club Limited')}
+          {sign(site.club_name ? `President, ${site.club_name}` : 'President')}
+          {sign(site.club_name ? `Vice President, ${site.club_name}` : 'Vice President')}
         </div>
         <div style={{ fontWeight: 700, fontSize: 12.5, color: LABEL, marginTop: 16 }}>Remarks</div>
         <div style={{ height: 120, background: FILL, borderRadius: 2 }}/>
@@ -276,7 +286,9 @@ export default function MembershipFormPdf({ record, onClose }: { record: Applica
     return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev }
   }, [onClose])
 
-  const fileName = `CKCL-Membership-Form-${record.form.personal.fullName.replace(/\s+/g, '-') || 'Applicant'}.pdf`
+  const site = useSiteInfo()
+  const filePrefix = (site.short_name || site.club_name || '').trim().replace(/\s+/g, '-')
+  const fileName = `${filePrefix ? `${filePrefix}-` : ''}Membership-Form-${record.form.personal.fullName.replace(/\s+/g, '-') || 'Applicant'}.pdf`
   const btn: React.CSSProperties = { height: 34, minWidth: 34, padding: '0 12px', borderRadius: 999, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)', color: '#FFFFFF', fontFamily: 'CKCL', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }
 
   return createPortal(

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Footer from './Footer'
 import { ApiError, postWebsiteContact } from '../lib/api'
+import { useContactFaqs } from '../lib/contactFaqs'
 import { useSiteInfo } from '../lib/siteInfo'
 
 const T = {
@@ -115,7 +116,7 @@ function ContactCard() {
       }}
     >
       <div>
-        <div className="eyebrow mb-1" style={{ fontSize: 10, color: T.brass }}>CHITTAGONG KHULSHI CLUB LIMITED</div>
+        <div className="eyebrow mb-1" style={{ fontSize: 10, color: T.brass }}>{(site.club_name || 'CLUB').toUpperCase()}</div>
         <h2 style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 22, color: T.ink900, margin: 0, letterSpacing: '-0.01em' }}>Get in touch</h2>
       </div>
 
@@ -415,41 +416,42 @@ function MapBand() {
   )
 }
 
-// ─── FAQ ──────────────────────────────────────────────────────────────────────
-const FAQS = [
-  { q: 'How do I submit a membership application?', a: 'Download the application form from the Membership Process page, complete it with two member references, and submit it to the Club Secretariat in person or by post during office hours.' },
-  { q: 'How do I book a facility?', a: 'Facility bookings can be made by contacting the Club Office by phone or email during office hours. The Convention Hall and Guest House require advance booking; other facilities are available on a walk-in basis for members.' },
-  { q: 'Can I pay my dues online?', a: 'Yes. Members can pay dues through the Club Dues section under Resources using bKash, Nagad, credit/debit card, or bank transfer.' },
-  { q: 'Where is the club located and is there parking?', a: 'The club is at Holding No. 1471/2184/1, Foy\'s Lake Road, Khulshi, Chattogram — opposite the Ansar Sadar Doptor. Member parking is available within the compound.' },
-]
-
+// ─── FAQ (API: GET /club-portal/website/contact-faqs) ─────────────────────────
 function ContactFAQ() {
   const [open, setOpen] = useState<number | null>(null)
+  const { faqs, loading } = useContactFaqs()
+
+  if (!loading && faqs.length === 0) return null
+
   return (
     <div>
       <div className="eyebrow mb-4" style={{ fontSize: 10, color: T.brass }}>FREQUENTLY ASKED</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {FAQS.map((faq, i) => {
-          const isOpen = open === i
-          return (
-            <div key={i} style={{ background: isOpen ? '#FFFFFF' : 'rgba(255,255,255,0.65)', border: `1px solid ${isOpen ? T.ink100 : 'rgba(226,230,236,0.50)'}`, borderRadius: 14, overflow: 'hidden', transition: 'all 180ms' }}>
-              <button
-                onClick={() => setOpen(isOpen ? null : i)}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '16px 20px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
-              >
-                <span style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 9, color: T.brand, flexShrink: 0, letterSpacing: '0.06em' }}>{String(i + 1).padStart(2, '0')}</span>
-                <span style={{ flex: 1, fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900, lineHeight: 1.4 }}>{faq.q}</span>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={isOpen ? T.brand : T.ink200} strokeWidth="2.5" style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 220ms ease-out', flexShrink: 0 }}><polyline points="6 9 12 15 18 9"/></svg>
-              </button>
-              {isOpen && (
-                <div style={{ padding: '0 20px 18px 20px', paddingLeft: 44 }}>
-                  <p style={{ fontFamily: 'CKCL', fontSize: 14, lineHeight: 1.70, color: T.ink400, margin: 0 }}>{faq.a}</p>
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+      {loading && faqs.length === 0 ? (
+        <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400 }}>Loading FAQs…</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {faqs.map((faq, i) => {
+            const isOpen = open === i
+            return (
+              <div key={`${faq.q}-${i}`} style={{ background: isOpen ? '#FFFFFF' : 'rgba(255,255,255,0.65)', border: `1px solid ${isOpen ? T.ink100 : 'rgba(226,230,236,0.50)'}`, borderRadius: 14, overflow: 'hidden', transition: 'all 180ms' }}>
+                <button
+                  onClick={() => setOpen(isOpen ? null : i)}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '16px 20px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+                >
+                  <span style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 9, color: T.brand, flexShrink: 0, letterSpacing: '0.06em' }}>{String(i + 1).padStart(2, '0')}</span>
+                  <span style={{ flex: 1, fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900, lineHeight: 1.4 }}>{faq.q}</span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={isOpen ? T.brand : T.ink200} strokeWidth="2.5" style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 220ms ease-out', flexShrink: 0 }}><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                {isOpen && (
+                  <div style={{ padding: '0 20px 18px 20px', paddingLeft: 44 }}>
+                    <p style={{ fontFamily: 'CKCL', fontSize: 14, lineHeight: 1.70, color: T.ink400, margin: 0 }}>{faq.a}</p>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

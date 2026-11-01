@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import Footer from './Footer'
 import ReservationForm from './ReservationForm'
 import {
@@ -271,7 +271,7 @@ function Lightbox({ photos, startIndex, onClose }: { photos: FacilityPhoto[]; st
   )
 }
 
-function BookingSheet({ facilityId, onClose }: { facilityId: FacilityId; onClose: () => void }) {
+function BookingSheet({ facilityId, onClose, onSignIn }: { facilityId: FacilityId; onClose: () => void; onSignIn?: () => void }) {
   return (
     <div
       className="fixed inset-0 z-[200] flex items-end"
@@ -289,17 +289,17 @@ function BookingSheet({ facilityId, onClose }: { facilityId: FacilityId; onClose
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5C6673" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        <ReservationForm facilityId={facilityId} />
+        <ReservationForm facilityId={facilityId} onSignIn={onSignIn} />
       </div>
     </div>
   )
 }
 
-function BookingCard({ facilityId }: { facilityId: FacilityId }) {
+function BookingCard({ facilityId, onSignIn }: { facilityId: FacilityId; onSignIn?: () => void }) {
   return (
     <div className="glass-strong sticky" style={{ borderRadius: 24, padding: '28px', top: 120 }}>
       <h3 style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 22, color: '#0E1116', margin: '0 0 20px' }}>Reserve</h3>
-      <ReservationForm facilityId={facilityId} />
+      <ReservationForm facilityId={facilityId} onSignIn={onSignIn} />
     </div>
   )
 }
@@ -357,10 +357,12 @@ function FacilityDetailPage({
   facilityId,
   onBack,
   onSelectFacility,
+  onSignIn,
 }: {
   facilityId: FacilityId
   onBack: () => void
   onSelectFacility: (id: FacilityId) => void
+  onSignIn?: () => void
 }) {
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -520,7 +522,7 @@ function FacilityDetailPage({
 
           {data.bookable ? (
             <div className="hidden lg:block" style={{ width: 320, flexShrink: 0 }}>
-              <BookingCard facilityId={data.slug} />
+              <BookingCard facilityId={data.slug} onSignIn={onSignIn} />
             </div>
           ) : null}
         </div>
@@ -543,7 +545,7 @@ function FacilityDetailPage({
               Request Booking
             </button>
           </div>
-          {sheetOpen && <BookingSheet facilityId={data.slug} onClose={() => setSheetOpen(false)} />}
+          {sheetOpen && <BookingSheet facilityId={data.slug} onClose={() => setSheetOpen(false)} onSignIn={onSignIn} />}
         </>
       ) : null}
 
@@ -559,27 +561,35 @@ function FacilityDetailPage({
 export default function FacilitiesPage({
   initialFacility,
   onBack,
+  onSelectFacility,
+  onSignIn,
 }: {
   initialFacility?: FacilityId
   onBack: () => void
+  /** When set, facility selection updates the parent URL/route instead of local-only state. */
+  onSelectFacility?: (id: FacilityId) => void
+  /** Send guests to member login before booking. */
+  onSignIn?: () => void
 }) {
-  const [selected, setSelected] = useState<FacilityId | null>(initialFacility ?? null)
+  const selected = initialFacility ?? null
 
-  useEffect(() => {
-    setSelected(initialFacility ?? null)
-  }, [initialFacility])
+  const pick = (id: FacilityId) => {
+    if (onSelectFacility) onSelectFacility(id)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
   if (selected) {
     return (
       <FacilityDetailPage
         facilityId={selected}
-        onBack={() => setSelected(null)}
-        onSelectFacility={(id) => { setSelected(id); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+        onBack={onBack}
+        onSelectFacility={pick}
+        onSignIn={onSignIn}
       />
     )
   }
 
-  return <FacilitiesOverview onSelectFacility={(id) => { setSelected(id); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+  return <FacilitiesOverview onSelectFacility={pick} />
 }
 
 /** @deprecated kept for older imports — list now comes from API */

@@ -1,7 +1,24 @@
 import { useState, useRef, useEffect } from 'react'
 import Footer from './Footer'
 import SubTabs from './SubTabs'
-import { MEMBERS, type Member, type MemberTier } from '../data/members'
+import { useReports, type Report } from '../lib/resources'
+import { useSiteInfo } from '../lib/siteInfo'
+import { usePortalClubSettings } from '../lib/apply'
+import {
+  downloadDuesStatementPdf,
+  duesPhoto,
+  fetchDuesPayMethods,
+  fetchDuesStatement,
+  fetchDuesSummary,
+  lookupDuesMembers,
+  sendDuesOtp,
+  setDuesToken,
+  settleDuesPay,
+  startDuesPay,
+  verifyDuesOtp,
+  type DuesMemberHit,
+  type DuesPayAccount,
+} from '../lib/dues'
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const T = {
@@ -21,150 +38,78 @@ const TABS: { id: ResourceTab; label: string }[] = [
   { id: 'dues',    label: 'Club Dues' },
 ]
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ANNUAL REPORTS DATA
-// ═══════════════════════════════════════════════════════════════════════════════
-type Report = {
-  id: number; year: string; title: string; subtitle: string; pages: number; size: string
-  cover: string; featured?: boolean; publishedDate: string
+function StateBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ padding: '64px 24px', textAlign: 'center', background: '#FFFFFF', borderRadius: 20, border: `1px solid ${T.ink100}`, fontFamily: 'CKCL', fontSize: 15, color: T.ink400 }}>
+      {children}
+    </div>
+  )
 }
 
-const REPORTS: Report[] = [
-  {
-    id: 1, year: '2025–26', featured: true,
-    title: 'Annual Report 2025–26',
-    subtitle: 'Financial statements, committee proceedings, facility upgrades, and membership highlights for the year ending June 2026.',
-    pages: 84, size: '12.4 MB',
-    publishedDate: 'August 2026',
-    cover: 'https://images.unsplash.com/photo-1700514077430-3659e38eb5e7?w=480&h=640&fit=crop&auto=format',
-  },
-  {
-    id: 2, year: '2024–25',
-    title: 'Annual Report 2024–25',
-    subtitle: 'Year in review, audited accounts, and strategic outlook.',
-    pages: 76, size: '9.8 MB',
-    publishedDate: 'September 2025',
-    cover: 'https://images.unsplash.com/photo-1720623784273-f9388b9aa535?w=480&h=640&fit=crop&auto=format',
-  },
-  {
-    id: 3, year: '2023–24',
-    title: 'Annual Report 2023–24',
-    subtitle: 'Ten-year anniversary edition — financial statements and membership growth.',
-    pages: 92, size: '14.2 MB',
-    publishedDate: 'August 2024',
-    cover: 'https://images.unsplash.com/photo-1545128485-c400e7702796?w=480&h=640&fit=crop&auto=format',
-  },
-  {
-    id: 4, year: '2022–23',
-    title: 'Annual Report 2022–23',
-    subtitle: 'Post-pandemic recovery, facility reinvestment, and new memberships.',
-    pages: 68, size: '8.1 MB',
-    publishedDate: 'October 2023',
-    cover: 'https://images.unsplash.com/photo-1676302144341-10563603f99a?w=480&h=640&fit=crop&auto=format',
-  },
-  {
-    id: 5, year: '2021–22',
-    title: 'Annual Report 2021–22',
-    subtitle: 'Resilience and growth through a challenging year.',
-    pages: 60, size: '7.4 MB',
-    publishedDate: 'November 2022',
-    cover: 'https://images.unsplash.com/photo-1602081115720-72e5b0a254b8?w=480&h=640&fit=crop&auto=format',
-  },
-  {
-    id: 6, year: '2020–21',
-    title: 'Annual Report 2020–21',
-    subtitle: 'Navigating extraordinary circumstances — financial statements and outlook.',
-    pages: 55, size: '6.9 MB',
-    publishedDate: 'December 2021',
-    cover: 'https://images.unsplash.com/photo-1572331165267-854da2b10ccc?w=480&h=640&fit=crop&auto=format',
-  },
-  {
-    id: 7, year: '2019–20',
-    title: 'Annual Report 2019–20',
-    subtitle: 'Membership milestones, convention hall expansion, and five-year outlook.',
-    pages: 72, size: '10.1 MB',
-    publishedDate: 'October 2020',
-    cover: 'https://images.unsplash.com/photo-1643101570532-88c8ecc07c1f?w=480&h=640&fit=crop&auto=format',
-  },
-]
-
-// ─── PDF Viewer ───────────────────────────────────────────────────────────────
+// ─── PDF / report viewer ──────────────────────────────────────────────────────
 function ReportViewer({ report, onClose }: { report: Report; onClose: () => void }) {
-  const [zoom, setZoom] = useState(100)
-  const [page, setPage] = useState(1)
+  const site = useSiteInfo()
+  const clubName = site.club_name || site.short_name || 'Club'
+  const hasFile = Boolean(report.file_url)
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [onClose])
 
   return (
     <div
       style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(14,17,22,0.90)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', display: 'flex', flexDirection: 'column' }}
       onClick={onClose}
     >
-      {/* Top bar */}
       <div
         style={{ background: 'rgba(255,255,255,0.06)', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'CKCL', fontSize: 14, fontWeight: 600, color: '#FFFFFF', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{report.title}</div>
-          <div style={{ fontFamily: 'CKCL', fontSize: 10, color: 'rgba(255,255,255,0.40)', marginTop: 2 }}>{report.pages} pages · {report.size}</div>
+          <div style={{ fontFamily: 'CKCL', fontSize: 10, color: 'rgba(255,255,255,0.40)', marginTop: 2 }}>
+            {[report.pages ? `${report.pages} pages` : null, report.size || null, report.publishedDate || null].filter(Boolean).join(' · ')}
+          </div>
         </div>
-
-        {/* Page nav */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} style={overlayBtn}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.80)" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg></button>
-          <span style={{ fontFamily: 'CKCL', fontSize: 11, color: 'rgba(255,255,255,0.55)', minWidth: 64, textAlign: 'center' }}>p. {page} / {report.pages}</span>
-          <button onClick={() => setPage((p) => Math.min(report.pages, p + 1))} disabled={page === report.pages} style={overlayBtn}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.80)" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>
-        </div>
-
-        {/* Zoom */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button onClick={() => setZoom((z) => Math.max(50, z - 25))} style={overlayBtn}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.80)" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
-          <span style={{ fontFamily: 'CKCL', fontSize: 11, color: 'rgba(255,255,255,0.55)', minWidth: 36, textAlign: 'center' }}>{zoom}%</span>
-          <button onClick={() => setZoom((z) => Math.min(200, z + 25))} style={overlayBtn}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.80)" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
-        </div>
-
-        <button style={overlayBtn}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.80)" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+        {report.file_url && (
+          <a href={report.file_url} download target="_blank" rel="noopener noreferrer" title="Download" style={overlayBtn}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.80)" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </a>
+        )}
         <button onClick={onClose} style={overlayBtn}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.80)" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
 
-      {/* Page */}
-      <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: 24 }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ width: `${zoom}%`, maxWidth: 720, minWidth: 300, background: '#FFFFFF', borderRadius: 10, boxShadow: '0 20px 64px rgba(0,0,0,0.40)', padding: 48, transition: 'width 200ms' }}>
-          {/* Simulated report page */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: `2px solid ${T.brand}`, paddingBottom: 20, marginBottom: 24 }}>
-            <div>
-              <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 20, color: T.ink900 }}>Chittagong Khulshi Club Limited</div>
-              <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>{report.title}</div>
+      <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: hasFile ? 'stretch' : 'flex-start', justifyContent: 'center', padding: 24 }} onClick={(e) => e.stopPropagation()}>
+        {hasFile ? (
+          <iframe
+            src={report.file_url!}
+            title={report.title}
+            style={{ width: '100%', maxWidth: 960, border: 'none', borderRadius: 10, background: '#FFFFFF', boxShadow: '0 20px 64px rgba(0,0,0,0.40)' }}
+          />
+        ) : (
+          <div style={{ width: '100%', maxWidth: 720, minWidth: 280, background: '#FFFFFF', borderRadius: 10, boxShadow: '0 20px 64px rgba(0,0,0,0.40)', padding: 48 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: `2px solid ${T.brand}`, paddingBottom: 20, marginBottom: 24 }}>
+              <div>
+                <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 20, color: T.ink900 }}>{clubName}</div>
+                <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>{report.title}</div>
+              </div>
             </div>
-            <div style={{ width: 40, height: 40, borderRadius: '50%', background: T.brand, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'CKCL', fontWeight: 700, fontSize: 14, color: '#FFFFFF', flexShrink: 0 }}>CK</div>
-          </div>
-
-          {page === 1 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 28, color: T.ink900, lineHeight: 1.15 }}>{report.title}</div>
-              <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, lineHeight: 1.65 }}>{report.subtitle}</div>
-              <img src={report.cover} alt="Cover" style={{ width: '100%', borderRadius: 8, marginTop: 8 }} />
+              {report.subtitle && <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, lineHeight: 1.65 }}>{report.subtitle}</div>}
+              {report.cover && <img src={report.cover} alt="" style={{ width: '100%', borderRadius: 8, marginTop: 8 }} />}
+              <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, marginTop: 8 }}>
+                The PDF for this report has not been uploaded yet. Please check back later or contact the club office.
+              </div>
             </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 18, color: T.ink900, marginBottom: 8 }}>Page {page}</div>
-              {[...Array(8)].map((_, i) => (
-                <div key={i} style={{ height: 12, background: T.surface100, borderRadius: 4, width: i % 4 === 3 ? '60%' : '100%' }} />
-              ))}
-              <div style={{ height: 80, background: T.surface100, borderRadius: 8, marginTop: 8 }} />
-              {[...Array(4)].map((_, i) => (
-                <div key={i} style={{ height: 12, background: T.surface100, borderRadius: 4, width: i % 3 === 2 ? '75%' : '100%' }} />
-              ))}
-            </div>
-          )}
-
-          <div style={{ fontFamily: 'CKCL', fontSize: 10, color: T.ink200, textAlign: 'center', marginTop: 40, paddingTop: 16, borderTop: `1px solid ${T.ink100}` }}>
-            Chittagong Khulshi Club Limited · {report.title} · Page {page} of {report.pages}
           </div>
-        </div>
+        )}
       </div>
 
       <div style={{ padding: '8px', textAlign: 'center', flexShrink: 0 }}>
-        <span style={{ fontFamily: 'CKCL', fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>Press ESC to close · ← → to navigate pages</span>
+        <span style={{ fontFamily: 'CKCL', fontSize: 10, color: 'rgba(255,255,255,0.25)' }}>Press ESC to close</span>
       </div>
     </div>
   )
@@ -173,14 +118,36 @@ function ReportViewer({ report, onClose }: { report: Report; onClose: () => void
 // ─── Annual Reports Section ───────────────────────────────────────────────────
 function ReportsSection() {
   const [viewing, setViewing] = useState<Report | null>(null)
-  const featured = REPORTS.find((r) => r.featured)!
-  const rest = REPORTS.filter((r) => !r.featured)
+  const { data, error, loading, reload } = useReports()
+
+  if (!data) {
+    return loading ? (
+      <StateBox>
+        <div style={{ width: 28, height: 28, margin: '0 auto 12px', borderRadius: '50%', border: `3px solid ${T.ink100}`, borderTopColor: T.brand, animation: 'spin 0.8s linear infinite' }} />
+        Loading reports…
+      </StateBox>
+    ) : (
+      <StateBox>
+        <div style={{ marginBottom: 14 }}>{error || 'Could not load reports.'}</div>
+        <button onClick={reload} style={{ padding: '9px 18px', fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: '#FFFFFF', background: T.brand, border: 'none', borderRadius: 999, cursor: 'pointer' }}>Try again</button>
+      </StateBox>
+    )
+  }
+
+  const featured = data.featured
+  const rest = data.reports
+  if (!featured) return <StateBox>No annual reports have been published yet.</StateBox>
+
+  const metaBits = (r: Report) =>
+    [
+      r.pages ? { label: `${r.pages} pages` } : null,
+      r.size ? { label: r.size } : null,
+    ].filter(Boolean) as { label: string }[]
 
   return (
     <>
       {viewing && <ReportViewer report={viewing} onClose={() => setViewing(null)} />}
 
-      {/* Featured report card — mobile: cover stacked above the content; from sm: cover column beside it */}
       <div
         style={{
           background: '#FFFFFF',
@@ -192,32 +159,29 @@ function ReportsSection() {
         }}
         className="grid grid-cols-1 sm:grid-cols-[200px_1fr]"
       >
-        {/* Cover thumbnail */}
         <div className="h-44 sm:h-auto" style={{ position: 'relative', overflow: 'hidden', background: T.surface100 }}>
-          <img src={featured.cover} alt={featured.title} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+          {featured.cover && <img src={featured.cover} alt={featured.title} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
           <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to right, transparent, rgba(14,17,22,0.06))' }} />
         </div>
 
-        {/* Content */}
         <div style={{ padding: 'clamp(20px,3vw,40px)', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 12, minWidth: 0 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontFamily: 'CKCL', fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: T.brass, background: T.brassDim, border: `1px solid ${T.brass}40`, borderRadius: 999, padding: '4px 10px' }}>LATEST REPORT</span>
-            <span className="eyebrow" style={{ fontSize: 10, color: T.ink200 }}>{featured.publishedDate}</span>
+            {featured.publishedDate && <span className="eyebrow" style={{ fontSize: 10, color: T.ink200 }}>{featured.publishedDate}</span>}
           </div>
 
           <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 'clamp(20px,2.5vw,30px)', color: T.ink900, lineHeight: 1.15, letterSpacing: '-0.01em' }}>{featured.title}</div>
-          <p style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, lineHeight: 1.65, margin: 0, maxWidth: 520 }}>{featured.subtitle}</p>
+          {featured.subtitle && <p style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, lineHeight: 1.65, margin: 0, maxWidth: 520 }}>{featured.subtitle}</p>}
 
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
-            <div style={{ display: 'flex', gap: 16 }}>
-              {[{ icon: '📄', label: `${featured.pages} pages` }, { icon: '💾', label: featured.size }].map((m) => (
-                <div key={m.label} style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ fontSize: 13 }}>{m.icon}</span>{m.label}
-                </div>
-              ))}
-            </div>
+            {metaBits(featured).length > 0 && (
+              <div style={{ display: 'flex', gap: 16 }}>
+                {metaBits(featured).map((m) => (
+                  <div key={m.label} style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400 }}>{m.label}</div>
+                ))}
+              </div>
+            )}
 
-            {/* Mobile: full-width pair on its own row; from sm: pushed right */}
             <div className="w-full sm:w-auto sm:ml-auto" style={{ display: 'flex', gap: 8 }}>
               <button
                 onClick={() => setViewing(featured)}
@@ -228,101 +192,102 @@ function ReportsSection() {
               >
                 View Report
               </button>
-              <button
-                className="flex-1 sm:flex-none"
-                style={{ whiteSpace: 'nowrap', padding: '10px 16px', fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: T.ink600, background: T.surface100, border: `1px solid ${T.ink100}`, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, transition: 'all 160ms' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.ink100 }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface100 }}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Download
-              </button>
+              {featured.file_url && (
+                <a
+                  href={featured.file_url}
+                  download
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 sm:flex-none"
+                  style={{ whiteSpace: 'nowrap', padding: '10px 16px', fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: T.ink600, background: T.surface100, border: `1px solid ${T.ink100}`, borderRadius: 999, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Download
+                </a>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Year-grouped list */}
-      <div className="eyebrow mb-4" style={{ fontSize: 10, color: T.brass }}>PREVIOUS REPORTS</div>
-      <div style={{ background: '#FFFFFF', borderRadius: 20, border: `1px solid ${T.ink100}`, overflow: 'hidden' }}>
-        {rest.map((report, i) => (
-          <div
-            key={report.id}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 16,
-              padding: '18px 24px',
-              borderBottom: i < rest.length - 1 ? `1px solid ${T.ink100}` : 'none',
-              transition: 'background 140ms',
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface50 }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
-          >
-            {/* Year badge */}
-            <div
-              style={{
-                width: 72, height: 52,
-                background: T.surface100,
-                borderRadius: 10,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                flexShrink: 0,
-              }}
-            >
-              <span style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900, letterSpacing: '-0.01em' }}>{report.year}</span>
-            </div>
+      {rest.length > 0 && (
+        <>
+          <div className="eyebrow mb-4" style={{ fontSize: 10, color: T.brass }}>PREVIOUS REPORTS</div>
+          <div style={{ background: '#FFFFFF', borderRadius: 20, border: `1px solid ${T.ink100}`, overflow: 'hidden' }}>
+            {rest.map((report, i) => (
+              <div
+                key={`${report.id}-${report.title}`}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 16,
+                  padding: '18px 24px',
+                  borderBottom: i < rest.length - 1 ? `1px solid ${T.ink100}` : 'none',
+                  transition: 'background 140ms',
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface50 }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
+              >
+                <div
+                  style={{
+                    width: 72, height: 52,
+                    background: T.surface100,
+                    borderRadius: 10,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <span style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 13, color: T.ink900, letterSpacing: '-0.01em', textAlign: 'center', padding: '0 4px', lineHeight: 1.15 }}>{report.year}</span>
+                </div>
 
-            {/* Title */}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900, marginBottom: 3 }}>{report.title}</div>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontFamily: 'CKCL', fontSize: 10, color: T.ink200 }}>{report.pages} pp</span>
-                <span style={{ fontFamily: 'CKCL', fontSize: 10, color: T.ink200 }}>{report.size}</span>
-                <span style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200 }}>Published {report.publishedDate}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900, marginBottom: 3 }}>{report.title}</div>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {report.pages > 0 && <span style={{ fontFamily: 'CKCL', fontSize: 10, color: T.ink200 }}>{report.pages} pp</span>}
+                    {report.size && <span style={{ fontFamily: 'CKCL', fontSize: 10, color: T.ink200 }}>{report.size}</span>}
+                    {report.publishedDate && <span style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200 }}>Published {report.publishedDate}</span>}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <button
+                    onClick={() => setViewing(report)}
+                    style={{ padding: '8px 16px', fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: T.brand, background: T.brandDim, border: `1px solid rgba(225,11,23,0.20)`, borderRadius: 8, cursor: 'pointer', transition: 'all 140ms' }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.brand; (e.currentTarget as HTMLElement).style.color = '#FFFFFF' }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = T.brandDim; (e.currentTarget as HTMLElement).style.color = T.brand }}
+                  >
+                    View
+                  </button>
+                  {report.file_url && (
+                    <a
+                      href={report.file_url}
+                      download
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ width: 34, height: 34, borderRadius: 8, background: T.surface100, border: `1px solid ${T.ink100}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.ink400 }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    </a>
+                  )}
+                </div>
               </div>
-            </div>
-
-            {/* Actions */}
-            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-              <button
-                onClick={() => setViewing(report)}
-                style={{ padding: '8px 16px', fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: T.brand, background: T.brandDim, border: `1px solid rgba(225,11,23,0.20)`, borderRadius: 8, cursor: 'pointer', transition: 'all 140ms' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.brand; (e.currentTarget as HTMLElement).style.color = '#FFFFFF' }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = T.brandDim; (e.currentTarget as HTMLElement).style.color = T.brand }}
-              >
-                View
-              </button>
-              <button
-                style={{ width: 34, height: 34, borderRadius: 8, background: T.surface100, border: `1px solid ${T.ink100}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'background 140ms' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.ink100 }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = T.surface100 }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.ink400} strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              </button>
-            </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </>
+      )}
     </>
   )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CLUB DUES DATA
+// CLUB LIVE_DUES DATA
 // ═══════════════════════════════════════════════════════════════════════════════
 type DueStatus = 'Paid' | 'Overdue' | 'Upcoming'
 type DueEntry = {
   id: number; period: string; description: string; amount: number; dueDate: string; paidDate?: string; status: DueStatus
 }
 
-const DUES: DueEntry[] = [
-  { id: 1,  period: 'Jul 2025 – Jun 2026', description: 'Annual Subscription FY 2025–26',    amount: 12000, dueDate: '01 Jul 2025', paidDate: '28 Jun 2025', status: 'Paid' },
-  { id: 2,  period: 'Jul 2025 – Jun 2026', description: 'Convention Hall Booking — Oct 2025', amount: 8500,  dueDate: '01 Oct 2025', paidDate: '30 Sep 2025', status: 'Paid' },
-  { id: 3,  period: 'Jul 2025 – Jun 2026', description: 'Guest House (2 nights) — Nov 2025',  amount: 4000,  dueDate: '15 Nov 2025', paidDate: '14 Nov 2025', status: 'Paid' },
-  { id: 4,  period: 'Jul 2026 – Jun 2027', description: 'Annual Subscription FY 2026–27',    amount: 12000, dueDate: '01 Jul 2026', status: 'Overdue' },
-  { id: 5,  period: 'Jul 2026 – Jun 2027', description: 'Late Payment Surcharge (10%)',       amount:  500,  dueDate: '01 Oct 2026', status: 'Overdue' },
-  { id: 6,  period: 'Jul 2026 – Jun 2027', description: 'Swimming Pool Seasonal Pass',        amount: 3600,  dueDate: '15 Oct 2026', status: 'Upcoming' },
-]
-
-const OUTSTANDING = DUES.filter((d) => d.status !== 'Paid').reduce((s, d) => s + d.amount, 0)
+// Live dues rows are loaded after OTP via /club-portal/dues/*
+let LIVE_DUES: DueEntry[] = []
+let LIVE_OUTSTANDING = 0
 
 type PayMethod = 'card' | 'bkash' | 'nagad' | 'bank'
 const PAY_METHODS: { id: PayMethod; label: string; icon: React.ReactNode }[] = [
@@ -360,8 +325,7 @@ function StatusChip({ status }: { status: DueStatus }) {
 }
 
 // ─── Payment success screen ───────────────────────────────────────────────────
-function PaymentSuccess({ amount, onDone }: { amount: number; onDone: () => void }) {
-  const ref = `TXN${Math.random().toString(36).slice(2, 10).toUpperCase()}`
+function PaymentSuccess({ amount, receiptNo, onDone }: { amount: number; receiptNo?: string; onDone: () => void }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 420, gap: 0 }}>
       <div style={{ background: 'rgba(255,255,255,0.88)', backdropFilter: 'blur(32px)', WebkitBackdropFilter: 'blur(32px)', border: `1px solid ${T.ink100}`, borderRadius: 28, padding: 'clamp(36px,4vw,52px)', maxWidth: 420, width: '100%', textAlign: 'center', boxShadow: '0 16px 48px rgba(14,17,22,0.10)' }}>
@@ -372,14 +336,18 @@ function PaymentSuccess({ amount, onDone }: { amount: number; onDone: () => void
         </div>
 
         <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 24, color: T.ink900, marginBottom: 6 }}>Payment successful.</div>
-        <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, lineHeight: 1.6, marginBottom: 24 }}>Your payment has been processed. A receipt has been sent to your registered email address.</div>
+        <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, lineHeight: 1.6, marginBottom: 24 }}>Your payment has been recorded. Outstanding dues on this statement are updated.</div>
 
         <div style={{ background: T.surface50, border: `1px solid ${T.ink100}`, borderRadius: 14, padding: '16px 20px', marginBottom: 24 }}>
           <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, marginBottom: 4 }}>AMOUNT PAID</div>
           <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 28, color: T.ink900, letterSpacing: '-0.01em' }}>৳ {amount.toLocaleString('en-BD')}</div>
-          <div style={{ height: 1, background: T.ink100, margin: '14px 0' }} />
-          <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, marginBottom: 3 }}>TRANSACTION ID</div>
-          <div style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 13, color: T.ink600, letterSpacing: '0.06em' }}>{ref}</div>
+          {receiptNo && (
+            <>
+              <div style={{ height: 1, background: T.ink100, margin: '14px 0' }} />
+              <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, marginBottom: 3 }}>RECEIPT</div>
+              <div style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 13, color: T.ink600, letterSpacing: '0.06em' }}>{receiptNo}</div>
+            </>
+          )}
         </div>
 
         <button
@@ -397,6 +365,9 @@ function PaymentSuccess({ amount, onDone }: { amount: number; onDone: () => void
 
 // ─── Payment failed screen ────────────────────────────────────────────────────
 function PaymentFailed({ onRetry }: { onRetry: () => void }) {
+  const site = useSiteInfo()
+  const phone = site.contact.phone
+  const hours = [site.office.days, site.office.hours].filter(Boolean).join(' · ')
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 380 }}>
       <div style={{ background: 'rgba(255,255,255,0.88)', backdropFilter: 'blur(32px)', WebkitBackdropFilter: 'blur(32px)', border: `1px solid ${T.ink100}`, borderRadius: 28, padding: 'clamp(36px,4vw,52px)', maxWidth: 420, width: '100%', textAlign: 'center', boxShadow: '0 16px 48px rgba(14,17,22,0.10)' }}>
@@ -411,8 +382,10 @@ function PaymentFailed({ onRetry }: { onRetry: () => void }) {
 
         <div style={{ background: '#FFF1F2', border: '1px solid rgba(225,11,23,0.15)', borderRadius: 12, padding: '14px 18px', marginBottom: 24 }}>
           <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink600, marginBottom: 8 }}>Need help? Contact us:</div>
-          <a href="tel:+8801988896906" style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 18, color: T.brand, textDecoration: 'none', display: 'block', marginBottom: 2 }}>+880 1988 896 906</a>
-          <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400 }}>Club Secretary · Sat–Thu 10 AM – 6 PM</div>
+          {phone && (
+            <a href={site.contact.phone_href ?? undefined} style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 18, color: T.brand, textDecoration: 'none', display: 'block', marginBottom: 2 }}>{phone}</a>
+          )}
+          <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400 }}>{hours || 'Club Secretary'}</div>
         </div>
 
         <button
@@ -432,22 +405,145 @@ function PaymentFailed({ onRetry }: { onRetry: () => void }) {
 // ─── Payment summary card ─────────────────────────────────────────────────────
 type PayState = 'idle' | 'processing' | 'success' | 'failed'
 
-function PaymentCard() {
+function PaymentCard({ outstanding, dues, onPaid }: {
+  outstanding: number
+  dues: DueEntry[]
+  onPaid: () => void
+}) {
   const [method, setMethod] = useState<PayMethod>('bkash')
   const [payState, setPayState] = useState<PayState>('idle')
-  const overdueDues = DUES.filter((d) => d.status === 'Overdue')
+  const [receiptNo, setReceiptNo] = useState('')
+  const [paidAmount, setPaidAmount] = useState(0)
+  const [payError, setPayError] = useState('')
+  const [reference, setReference] = useState('')
+  const [gateways, setGateways] = useState<string[]>([])
+  const [banks, setBanks] = useState<DuesPayAccount[]>([])
+  const [wallets, setWallets] = useState<{ bkash: DuesPayAccount | null; nagad: DuesPayAccount | null }>({ bkash: null, nagad: null })
+  const [memberNo, setMemberNo] = useState('')
+  const overdueDues = dues.filter((d) => d.status === 'Overdue')
 
-  const simulatePay = () => {
+  useEffect(() => {
+    let alive = true
+    fetchDuesPayMethods()
+      .then((m) => {
+        if (!alive || !m) return
+        setGateways(Array.isArray(m.gateways) ? m.gateways : [])
+        setBanks(Array.isArray(m.banks) ? m.banks : [])
+        setWallets({
+          bkash: m.wallets?.bkash || null,
+          nagad: m.wallets?.nagad || null,
+        })
+        setMemberNo(m.member_no || '')
+      })
+      .catch(() => { /* keep empty instructions */ })
+    return () => { alive = false }
+  }, [])
+
+  useEffect(() => {
+    setReference('')
+    setPayError('')
+  }, [method])
+
+  const hasOnlineCard = gateways.includes('sslcommerz')
+  const hasOnlineBkash = gateways.includes('bkash')
+  const wallet = method === 'bkash' ? wallets.bkash : method === 'nagad' ? wallets.nagad : null
+
+  const handlePay = async () => {
+    if (outstanding <= 0) return
+    setPayError('')
+
+    // Online hosted checkout only when that gateway is actually configured
+    if (method === 'card') {
+      if (!hasOnlineCard) {
+        setPayError('Card payment is not enabled yet. Use bKash, Nagad, or bank transfer.')
+        return
+      }
+      setPayState('processing')
+      try {
+        const started = await startDuesPay({ gateway: 'sslcommerz', pay_all_due: true })
+        if (started?.gateway_url) {
+          window.location.href = started.gateway_url
+          return
+        }
+        throw new Error('Could not start card checkout.')
+      } catch (e) {
+        setPayError(e instanceof Error ? e.message : 'Payment failed')
+        setPayState('failed')
+      }
+      return
+    }
+
+    if (method === 'bkash' && hasOnlineBkash) {
+      setPayState('processing')
+      try {
+        const started = await startDuesPay({ gateway: 'bkash', pay_all_due: true })
+        if (started?.gateway_url) {
+          window.location.href = started.gateway_url
+          return
+        }
+        throw new Error('Could not start bKash checkout.')
+      } catch (e) {
+        setPayError(e instanceof Error ? e.message : 'Payment failed')
+        setPayState('failed')
+      }
+      return
+    }
+
+    // Offline: must pay to the number/account first, then submit TrxID / reference
+    if (method === 'bkash' || method === 'nagad') {
+      if (!wallet?.account_no) {
+        setPayError(`${method === 'bkash' ? 'bKash' : 'Nagad'} number is not configured. Contact the club office.`)
+        return
+      }
+    }
+    if (method === 'bank' && banks.length === 0) {
+      setPayError('Bank accounts are not configured. Contact the club office.')
+      return
+    }
+    if (reference.trim().length < 6) {
+      setPayError(method === 'bank'
+        ? 'Enter the bank transfer reference / UTR (at least 6 characters).'
+        : 'Enter the TrxID from your payment SMS (at least 6 characters).')
+      return
+    }
+
     setPayState('processing')
-    setTimeout(() => setPayState(Math.random() > 0.25 ? 'success' : 'failed'), 2200)
+    try {
+      const settled = await settleDuesPay(method, reference.trim())
+      setPaidAmount(Number(settled?.amount || outstanding))
+      setReceiptNo(settled?.receipt_no || settled?.tran_id || '')
+      setPayState('success')
+      onPaid()
+    } catch (e) {
+      setPayError(e instanceof Error ? e.message : 'Payment failed')
+      setPayState('failed')
+    }
   }
 
   if (payState === 'success') {
-    return <PaymentSuccess amount={OUTSTANDING} onDone={() => setPayState('idle')} />
+    return <PaymentSuccess amount={paidAmount || outstanding} receiptNo={receiptNo} onDone={() => { setPayState('idle'); onPaid() }} />
   }
   if (payState === 'failed') {
     return <PaymentFailed onRetry={() => setPayState('idle')} />
   }
+
+  const copyText = async (value: string) => {
+    try { await navigator.clipboard.writeText(value) } catch { /* ignore */ }
+  }
+
+  const primaryLabel = (() => {
+    if (outstanding <= 0) return 'Nothing to pay'
+    if (payState === 'processing') return 'Processing…'
+    if (method === 'card' && hasOnlineCard) return `Pay ৳ ${outstanding.toLocaleString('en-BD')} by card`
+    if (method === 'bkash' && hasOnlineBkash) return `Continue to bKash`
+    if (method === 'card') return 'Card not available'
+    return `I paid — submit TrxID`
+  })()
+
+  const canClick =
+    outstanding > 0 &&
+    payState !== 'processing' &&
+    !(method === 'card' && !hasOnlineCard)
 
   return (
     <div
@@ -464,20 +560,20 @@ function PaymentCard() {
         boxShadow: '0 8px 32px rgba(14,17,22,0.08)',
       }}
     >
-      {/* Header band */}
       <div style={{ background: 'linear-gradient(135deg,rgba(225,11,23,0.06) 0%,rgba(185,139,67,0.06) 100%)', padding: '24px 24px 20px', borderBottom: `1px solid ${T.ink100}` }}>
         <div className="eyebrow" style={{ fontSize: 10, color: T.brass, marginBottom: 10 }}>OUTSTANDING BALANCE</div>
         <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 38, color: T.ink900, letterSpacing: '-0.02em', lineHeight: 1 }}>
           <span style={{ fontFamily: 'CKCL', fontSize: 20, verticalAlign: 'super', marginRight: 2, fontWeight: 700 }}>৳</span>
-          {OUTSTANDING.toLocaleString('en-BD')}
+          {outstanding.toLocaleString('en-BD')}
         </div>
-        <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 6 }}>Due immediately — incl. late surcharge</div>
+        <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 6 }}>
+          {outstanding > 0 ? 'Choose a method, pay to the club, then submit your TrxID' : 'Nothing outstanding'}
+        </div>
       </div>
 
-      {/* Breakdown */}
       <div style={{ padding: '18px 24px', borderBottom: `1px solid ${T.ink100}` }}>
         <div className="eyebrow mb-3" style={{ fontSize: 9, color: T.ink200 }}>BREAKDOWN</div>
-        {overdueDues.map((d) => (
+        {(overdueDues.length ? overdueDues : dues.filter((d) => d.status !== 'Paid')).slice(0, 6).map((d) => (
           <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: `1px solid ${T.surface100}` }}>
             <span style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, flex: 1, paddingRight: 8, lineHeight: 1.4 }}>{d.description}</span>
             <span style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 13, color: T.amber, whiteSpace: 'nowrap' }}>৳ {d.amount.toLocaleString('en-BD')}</span>
@@ -485,11 +581,10 @@ function PaymentCard() {
         ))}
         <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 10 }}>
           <span style={{ fontFamily: 'CKCL', fontSize: 13, fontWeight: 700, color: T.ink900 }}>Total</span>
-          <span style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 14, color: T.ink900 }}>৳ {OUTSTANDING.toLocaleString('en-BD')}</span>
+          <span style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 14, color: T.ink900 }}>৳ {outstanding.toLocaleString('en-BD')}</span>
         </div>
       </div>
 
-      {/* Payment method selector */}
       <div style={{ padding: '18px 24px', borderBottom: `1px solid ${T.ink100}` }}>
         <div className="eyebrow mb-3" style={{ fontSize: 9, color: T.ink200 }}>PAY WITH</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -498,6 +593,7 @@ function PaymentCard() {
             return (
               <button
                 key={pm.id}
+                type="button"
                 onClick={() => setMethod(pm.id)}
                 style={{
                   padding: '11px 12px',
@@ -521,11 +617,108 @@ function PaymentCard() {
         </div>
       </div>
 
-      {/* Pay button */}
+      {/* Method-specific how-to-pay */}
+      <div style={{ padding: '16px 24px', borderBottom: `1px solid ${T.ink100}`, background: T.surface50 }}>
+        <div className="eyebrow mb-2" style={{ fontSize: 9, color: T.brass }}>HOW TO PAY</div>
+
+        {method === 'card' && (
+          <p style={{ margin: 0, fontFamily: 'CKCL', fontSize: 13, color: T.ink600, lineHeight: 1.55 }}>
+            {hasOnlineCard
+              ? 'You will be redirected to a secure card checkout (SSLCommerz). No card details are stored on the club site.'
+              : 'Online card checkout is not enabled for this club yet. Please pay by bKash, Nagad, or bank transfer.'}
+          </p>
+        )}
+
+        {(method === 'bkash' || method === 'nagad') && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {method === 'bkash' && hasOnlineBkash ? (
+              <p style={{ margin: 0, fontFamily: 'CKCL', fontSize: 13, color: T.ink600, lineHeight: 1.55 }}>
+                Continue to the official bKash checkout. You will complete payment in the bKash window.
+              </p>
+            ) : wallet?.account_no ? (
+              <>
+                <p style={{ margin: 0, fontFamily: 'CKCL', fontSize: 13, color: T.ink600, lineHeight: 1.55 }}>
+                  1. Open {method === 'bkash' ? 'bKash' : 'Nagad'} → Send Money / Payment<br />
+                  2. Pay <strong>৳ {outstanding.toLocaleString('en-BD')}</strong> to the number below<br />
+                  3. Put <strong>{memberNo || 'your membership ID'}</strong> in the reference<br />
+                  4. Enter the TrxID from the confirmation SMS, then submit
+                </p>
+                <div style={{ background: '#FFFFFF', border: `1px solid ${T.ink100}`, borderRadius: 12, padding: '12px 14px' }}>
+                  <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, marginBottom: 4 }}>
+                    {wallet.branch_name || 'Merchant'} number
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={{ fontFamily: 'CKCL', fontWeight: 700, fontSize: 20, color: T.ink900, letterSpacing: '0.02em' }}>{wallet.account_no}</div>
+                    <button type="button" onClick={() => void copyText(wallet.account_no)} style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 600, color: T.brand, background: T.brandDim, border: 'none', borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>Copy</button>
+                  </div>
+                  {wallet.account_name && (
+                    <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 6 }}>{wallet.account_name}</div>
+                  )}
+                  {wallet.notes && (
+                    <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink400, marginTop: 6, lineHeight: 1.45 }}>{wallet.notes}</div>
+                  )}
+                </div>
+                <label style={{ display: 'block' }}>
+                  <div style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 600, color: T.ink400, marginBottom: 6 }}>TrxID *</div>
+                  <input
+                    value={reference}
+                    onChange={(e) => setReference(e.target.value)}
+                    placeholder="e.g. 8H7K2L9M0N"
+                    style={{ width: '100%', height: 44, padding: '0 12px', fontFamily: 'CKCL', fontSize: 14, color: T.ink900, background: '#FFFFFF', border: `1.5px solid ${T.ink100}`, borderRadius: 10, outline: 'none', boxSizing: 'border-box' }}
+                  />
+                </label>
+              </>
+            ) : (
+              <p style={{ margin: 0, fontFamily: 'CKCL', fontSize: 13, color: T.brand, lineHeight: 1.55 }}>
+                {method === 'bkash' ? 'bKash' : 'Nagad'} number is not set up yet. Contact the club office.
+              </p>
+            )}
+          </div>
+        )}
+
+        {method === 'bank' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <p style={{ margin: 0, fontFamily: 'CKCL', fontSize: 13, color: T.ink600, lineHeight: 1.55 }}>
+              Transfer <strong>৳ {outstanding.toLocaleString('en-BD')}</strong> to any club account below.
+              Use <strong>{memberNo || 'your membership ID'}</strong> in the narration, then enter the bank reference.
+            </p>
+            {banks.length === 0 ? (
+              <p style={{ margin: 0, fontFamily: 'CKCL', fontSize: 13, color: T.brand }}>No bank accounts published yet.</p>
+            ) : banks.map((b) => (
+              <div key={b.id} style={{ background: '#FFFFFF', border: `1px solid ${T.ink100}`, borderRadius: 12, padding: '12px 14px' }}>
+                <div style={{ fontFamily: 'CKCL', fontWeight: 700, fontSize: 14, color: T.ink900 }}>{b.bank_name}</div>
+                {b.branch_name && <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>{b.branch_name} branch</div>}
+                <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink600, marginTop: 8 }}>{b.account_name}</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
+                  <div style={{ fontFamily: 'CKCL', fontWeight: 700, fontSize: 16, color: T.ink900 }}>{b.account_no}</div>
+                  <button type="button" onClick={() => void copyText(b.account_no)} style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 600, color: T.brand, background: T.brandDim, border: 'none', borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>Copy</button>
+                </div>
+                {b.routing_no && <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, marginTop: 4 }}>Routing: {b.routing_no}</div>}
+                {b.notes && <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink400, marginTop: 6 }}>{b.notes}</div>}
+              </div>
+            ))}
+            <label style={{ display: 'block' }}>
+              <div style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 600, color: T.ink400, marginBottom: 6 }}>Bank reference / UTR *</div>
+              <input
+                value={reference}
+                onChange={(e) => setReference(e.target.value)}
+                placeholder="Transfer reference number"
+                style={{ width: '100%', height: 44, padding: '0 12px', fontFamily: 'CKCL', fontSize: 14, color: T.ink900, background: '#FFFFFF', border: `1.5px solid ${T.ink100}`, borderRadius: 10, outline: 'none', boxSizing: 'border-box' }}
+              />
+            </label>
+          </div>
+        )}
+
+        {payError && (
+          <div style={{ marginTop: 10, fontFamily: 'CKCL', fontSize: 12, color: T.brand, lineHeight: 1.45 }}>{payError}</div>
+        )}
+      </div>
+
       <div style={{ padding: '18px 24px' }}>
         <button
-          onClick={simulatePay}
-          disabled={payState === 'processing'}
+          type="button"
+          onClick={handlePay}
+          disabled={!canClick}
           style={{
             width: '100%',
             padding: '15px',
@@ -533,34 +726,30 @@ function PaymentCard() {
             fontSize: 15,
             fontWeight: 700,
             color: '#FFFFFF',
-            background: payState === 'processing' ? '#B70813' : T.brand,
+            background: !canClick ? '#B70813' : T.brand,
             border: 'none',
             borderRadius: 999,
-            cursor: payState === 'processing' ? 'default' : 'pointer',
+            cursor: !canClick ? 'default' : 'pointer',
             transition: 'background 160ms',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             gap: 8,
             letterSpacing: '-0.01em',
+            opacity: !canClick ? 0.55 : 1,
           }}
-          onMouseEnter={(e) => { if (payState !== 'processing') (e.currentTarget as HTMLElement).style.background = '#B70813' }}
-          onMouseLeave={(e) => { if (payState !== 'processing') (e.currentTarget as HTMLElement).style.background = T.brand }}
+          onMouseEnter={(e) => { if (canClick) (e.currentTarget as HTMLElement).style.background = '#B70813' }}
+          onMouseLeave={(e) => { if (canClick) (e.currentTarget as HTMLElement).style.background = T.brand }}
         >
           {payState === 'processing' ? (
             <>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.5" style={{ animation: 'spin 0.8s linear infinite' }}><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
               Processing…
             </>
-          ) : (
-            <>
-              Pay <span style={{ fontFamily: 'CKCL' }}>৳</span> {OUTSTANDING.toLocaleString('en-BD')}
-            </>
-          )}
+          ) : primaryLabel}
         </button>
-        <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, textAlign: 'center', marginTop: 10, display: 'flex', alignItems: 'center', gap: 5, justifyContent: 'center' }}>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={T.ink200} strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-          Secured by SSL encryption
+        <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, textAlign: 'center', marginTop: 10, lineHeight: 1.45 }}>
+          Selecting a method alone does not pay. Follow the steps, then submit.
         </div>
       </div>
     </div>
@@ -595,14 +784,14 @@ function DuesTable() {
       </div>
 
       {/* Rows */}
-      {DUES.map((due, i) => (
+      {LIVE_DUES.map((due, i) => (
         <div
           key={due.id}
           style={{
             display: 'grid',
             gridTemplateColumns: '1.4fr 2.4fr 1.2fr 1.2fr 1fr 0.7fr',
             padding: '16px 20px',
-            borderBottom: i < DUES.length - 1 ? `1px solid ${T.ink100}` : 'none',
+            borderBottom: i < LIVE_DUES.length - 1 ? `1px solid ${T.ink100}` : 'none',
             alignItems: 'center',
             background: due.status === 'Overdue' ? 'rgba(255,251,235,0.40)' : 'transparent',
             transition: 'background 140ms',
@@ -644,13 +833,13 @@ function DuesTable() {
 const taka = (n: number) => `৳ ${n.toLocaleString('en-BD')}`
 
 function MobileStatement() {
-  const overdue = DUES.filter((d) => d.status === 'Overdue')
-  const paidTotal = DUES.filter((d) => d.status === 'Paid').reduce((s, d) => s + d.amount, 0)
+  const overdue = LIVE_DUES.filter((d) => d.status === 'Overdue')
+  const paidTotal = LIVE_DUES.filter((d) => d.status === 'Paid').reduce((s, d) => s + d.amount, 0)
   // Current period first
-  const periods = [...new Set(DUES.map((d) => d.period))].reverse()
+  const periods = [...new Set(LIVE_DUES.map((d) => d.period))].reverse()
 
   const stats = [
-    { label: 'Outstanding', value: taka(OUTSTANDING), color: T.ink900 },
+    { label: 'Outstanding', value: taka(LIVE_OUTSTANDING), color: T.ink900 },
     { label: 'Overdue', value: `${overdue.length} ${overdue.length === 1 ? 'item' : 'items'}`, color: T.amber },
     { label: 'Paid', value: taka(paidTotal), color: T.green },
   ]
@@ -668,7 +857,7 @@ function MobileStatement() {
       </div>
 
       {periods.map((period) => {
-        const items = DUES.filter((d) => d.period === period)
+        const items = LIVE_DUES.filter((d) => d.period === period)
         const total = items.reduce((s, d) => s + d.amount, 0)
         return (
           <section key={period}>
@@ -736,6 +925,72 @@ function MobileStatement() {
 }
 
 function DuesSection() {
+  const [rows, setRows] = useState<DueEntry[]>([])
+  const [outstanding, setOutstanding] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const [pdfNote, setPdfNote] = useState('')
+  const [, bump] = useState(0)
+
+  const exportPdf = async () => {
+    if (pdfBusy) return
+    setPdfBusy(true)
+    setPdfNote('')
+    try {
+      await downloadDuesStatementPdf()
+      setPdfNote('Statement PDF downloaded.')
+      window.setTimeout(() => setPdfNote(''), 2500)
+    } catch (e) {
+      setPdfNote(e instanceof Error ? e.message : 'Could not download PDF.')
+    } finally {
+      setPdfBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    Promise.all([fetchDuesSummary(), fetchDuesStatement()])
+      .then(([summary, statement]) => {
+        if (!alive) return
+        const dueTotal = Number(summary?.total_due || 0)
+        const entries = (statement?.entries || []).map((e, i) => {
+          const debit = Number(e.debit || 0)
+          const credit = Number(e.credit || 0)
+          const status: DueStatus = credit > 0 ? 'Paid' : (debit > 0 ? 'Overdue' : 'Upcoming')
+          return {
+            id: i + 1,
+            period: e.date || '—',
+            description: e.description || e.type || 'Charge',
+            amount: debit > 0 ? debit : credit,
+            dueDate: e.date || '—',
+            paidDate: credit > 0 ? (e.date || undefined) : undefined,
+            status,
+          } as DueEntry
+        })
+        LIVE_DUES = entries
+        LIVE_OUTSTANDING = dueTotal
+        setRows(entries)
+        setOutstanding(dueTotal)
+        setError('')
+        bump((n) => n + 1)
+      })
+      .catch((e: Error) => { if (alive) setError(e.message || 'Could not load statement') })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [reloadKey])
+
+  if (loading) {
+    return <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, padding: 40, textAlign: 'center' }}>Loading your statement…</div>
+  }
+  if (error) {
+    return <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.brand, padding: 40, textAlign: 'center' }}>{error}</div>
+  }
+
+  const overdueCount = rows.filter((d) => d.status === 'Overdue').length
+
   return (
     <div className="grid lg:grid-cols-[1fr_340px] gap-8 items-start">
       {/* Left — statement table */}
@@ -745,10 +1000,20 @@ function DuesSection() {
             <div className="eyebrow mb-1" style={{ fontSize: 10, color: T.brass }}>STATEMENT</div>
             <h2 style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 22, color: T.ink900, margin: 0, letterSpacing: '-0.01em' }}>Account Statement</h2>
           </div>
-          <button style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px', fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: T.ink600, background: '#FFFFFF', border: `1px solid ${T.ink100}`, borderRadius: 10, cursor: 'pointer' }}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Export PDF
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => { void exportPdf() }}
+              disabled={pdfBusy}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px', fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: pdfBusy ? T.ink200 : T.ink600, background: '#FFFFFF', border: `1px solid ${T.ink100}`, borderRadius: 10, cursor: pdfBusy ? 'default' : 'pointer' }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              {pdfBusy ? 'Preparing PDF…' : 'Export PDF'}
+            </button>
+            {pdfNote && (
+              <div style={{ fontFamily: 'CKCL', fontSize: 11, color: pdfNote.includes('download') ? T.green : T.brand }}>{pdfNote}</div>
+            )}
+          </div>
         </div>
         <DuesTable />
         <MobileStatement />
@@ -757,43 +1022,58 @@ function DuesSection() {
         <div style={{ marginTop: 16, padding: '14px 18px', background: T.amberDim, border: `1px solid rgba(217,119,6,0.25)`, borderRadius: 12, display: 'flex', alignItems: 'flex-start', gap: 12 }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.amber} strokeWidth="2" style={{ flexShrink: 0, marginTop: 1 }}><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
           <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink600, lineHeight: 1.55 }}>
-            Your account has <strong style={{ color: T.amber }}>2 overdue items</strong> totalling <strong style={{ fontFamily: 'CKCL' }}>৳ {OUTSTANDING.toLocaleString('en-BD')}</strong>. A 10% late-payment surcharge has been applied. Please settle before 30 October 2026 to avoid suspension of facility access.
+            {overdueCount > 0
+              ? <>Your account has <strong style={{ color: T.amber }}>{overdueCount} overdue item{overdueCount === 1 ? '' : 's'}</strong> totalling <strong style={{ fontFamily: 'CKCL' }}>৳ {outstanding.toLocaleString('en-BD')}</strong>. Please settle outstanding dues to keep full facility access.</>
+              : <>No overdue items. Current balance due: <strong style={{ fontFamily: 'CKCL' }}>৳ {outstanding.toLocaleString('en-BD')}</strong>.</>}
           </div>
         </div>
       </div>
 
       {/* Right — sticky payment card */}
-      <PaymentCard />
+      <PaymentCard
+        outstanding={outstanding}
+        dues={rows}
+        onPaid={() => setReloadKey((k) => k + 1)}
+      />
     </div>
   )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DUES ACCESS — find member → verify by OTP → statement
-// Front-end only: the OTP is simulated (DEMO_OTP) until there's a backend to send it.
+// LIVE_DUES ACCESS — find member → verify by OTP → statement (live API)
 // ═══════════════════════════════════════════════════════════════════════════════
-const DEMO_OTP = '123456'
 const OTP_LENGTH = 6
 const RESEND_SECONDS = 30
 
-const TIER_CHIP: Record<MemberTier, { bg: string; color: string }> = {
-  'Founding Member': { bg: T.brassDim, color: T.brass },
-  'Life Member':     { bg: T.brandDim, color: T.brand },
-  'General Member':  { bg: T.surface100, color: T.ink400 },
+type DuesUiMember = {
+  id: string
+  name: string
+  memberNo: string
+  tier: string
+  avatar: string | null
+  phone_masked: string
+  email_masked: string
+  has_phone: boolean
+  has_email: boolean
+  designation?: string
+  company?: string
 }
 
-const memberId = (m: Member) => `CKCL-${String(m.id).padStart(4, '0')}`
-
-// Registered contacts, masked — placeholders derived from the member until real records exist
-const maskedPhone = (m: Member) => `+880 1${7 + (m.id % 3)}•• ••• ${String((m.id * 37) % 90 + 10)}`
-const maskedEmail = (m: Member) => {
-  const domain = m.company.toLowerCase().replace(/[^a-z]/g, '').slice(0, 12) || 'mail'
-  return `${m.name.replace(/^(Dr|Md|Mr|Mrs)\.?\s+/i, '')[0].toLowerCase()}•••••@${domain}.com`
+function mapHit(m: DuesMemberHit): DuesUiMember {
+  return {
+    id: m.id,
+    name: m.full_name,
+    memberNo: m.member_no,
+    tier: m.membership_type || 'Member',
+    avatar: duesPhoto(m.photo_url),
+    phone_masked: m.phone_masked || '',
+    email_masked: m.email_masked || '',
+    has_phone: !!m.has_phone,
+    has_email: !!m.has_email,
+  }
 }
 
-type Channel = 'phone' | 'email'
-
-function MemberAvatar({ m, size }: { m: Member; size: number }) {
+function MemberAvatar({ m, size }: { m: DuesUiMember; size: number }) {
   const initials = m.name.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase()
   return (
     <div style={{ width: size, height: size, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, background: T.surface100, border: '2px solid rgba(185,139,67,0.55)', boxShadow: '0 0 0 3px rgba(185,139,67,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -804,8 +1084,13 @@ function MemberAvatar({ m, size }: { m: Member; size: number }) {
   )
 }
 
-function TierChip({ tier }: { tier: MemberTier }) {
-  const s = TIER_CHIP[tier]
+function TierChip({ tier }: { tier: string }) {
+  const t = tier.toLowerCase()
+  const s = t.includes('found')
+    ? { bg: T.brassDim, color: T.brass }
+    : t.includes('life')
+      ? { bg: T.brandDim, color: T.brand }
+      : { bg: T.surface100, color: T.ink400 }
   return (
     <span style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 9, letterSpacing: '0.07em', color: s.color, background: s.bg, border: `1px solid ${s.color}40`, borderRadius: 999, padding: '4px 9px', whiteSpace: 'nowrap' }}>
       {tier.toUpperCase()}
@@ -853,26 +1138,34 @@ const primaryBtn = (disabled: boolean): React.CSSProperties => ({
 
 const Spinner = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.5" style={{ animation: 'spin 0.8s linear infinite' }}><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
 
-// ─── Step 1 — find member ─────────────────────────────────────────────────────
-// Same categories as the Membership Process page, plus Founding
-const MEMBER_TYPES = [
-  'Founding Member', 'Life Member', 'Permanent Member', 'Donor Member', 'Service Member',
-  'Temporary Member', 'Honorary Member', 'Corporate Member', 'Diplomat Member',
-]
-
-function FindMember({ onSelect }: { onSelect: (m: Member) => void }) {
+function FindMember({ onSelect }: { onSelect: (m: DuesUiMember) => void }) {
+  // Filter options = the club's active membership types (club-portal/settings).
+  const { data: clubSettings } = usePortalClubSettings()
+  const memberTypes = (clubSettings?.membership_types || []).map((t) => t.name)
   const [type, setType] = useState('')
   const [query, setQuery] = useState('')
-  const q = query.trim().toLowerCase()
-  const results = q.length < 2 ? [] : MEMBERS.filter((m) =>
-    (!type || m.tier === type) &&
-    (m.name.toLowerCase().includes(q) || memberId(m).toLowerCase().includes(q) || String(m.id) === q),
-  )
+  const [results, setResults] = useState<DuesUiMember[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const q = query.trim()
+
+  useEffect(() => {
+    if (q.length < 2) { setResults([]); setError(''); return }
+    let alive = true
+    setLoading(true)
+    const t = window.setTimeout(() => {
+      lookupDuesMembers(q, type || undefined)
+        .then((rows) => { if (alive) { setResults((rows || []).map(mapHit)); setError('') } })
+        .catch((e: Error) => { if (alive) { setResults([]); setError(e.message || 'Search failed') } })
+        .finally(() => { if (alive) setLoading(false) })
+    }, 280)
+    return () => { alive = false; window.clearTimeout(t) }
+  }, [q, type])
 
   return (
     <div style={gateCard}>
       <GateSteps step={1}/>
-      <div className="eyebrow mb-2" style={{ fontSize: 10, color: T.brass }}>CLUB DUES</div>
+      <div className="eyebrow mb-2" style={{ fontSize: 10, color: T.brass }}>CLUB LIVE_DUES</div>
       <h2 style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 'clamp(20px,2.4vw,26px)', color: T.ink900, margin: '0 0 6px', letterSpacing: '-0.01em' }}>Find your membership.</h2>
       <p style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, lineHeight: 1.6, margin: '0 0 22px' }}>
         Select your member type and search by name or membership ID. We'll verify it's you before showing your statement.
@@ -889,7 +1182,7 @@ function FindMember({ onSelect }: { onSelect: (m: Member) => void }) {
               style={{ ...fieldStyle, appearance: 'none', WebkitAppearance: 'none', paddingRight: 36, cursor: 'pointer' }}
             >
               <option value="">All types</option>
-              {MEMBER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              {memberTypes.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.ink400} strokeWidth="2.2" style={{ position: 'absolute', right: 14, top: 16, pointerEvents: 'none' }}><polyline points="6 9 12 15 18 9"/></svg>
           </div>
@@ -902,7 +1195,7 @@ function FindMember({ onSelect }: { onSelect: (m: Member) => void }) {
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Name or ID, e.g. CKCL-0007"
+              placeholder="Name or membership ID"
               className="dues-field"
               style={{ ...fieldStyle, paddingLeft: 40 }}
               autoComplete="off"
@@ -911,10 +1204,13 @@ function FindMember({ onSelect }: { onSelect: (m: Member) => void }) {
         </label>
       </div>
 
-      {/* Results */}
       <div style={{ marginTop: 16 }}>
         {q.length < 2 ? (
           <div style={{ fontFamily: 'CKCL', fontSize: 12.5, color: T.ink200, textAlign: 'center', padding: '14px 0' }}>Type at least 2 characters to search.</div>
+        ) : loading ? (
+          <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400, textAlign: 'center', padding: '18px 12px' }}>Searching…</div>
+        ) : error ? (
+          <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.brand, textAlign: 'center', padding: '18px 12px' }}>{error}</div>
         ) : results.length === 0 ? (
           <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400, textAlign: 'center', padding: '18px 12px', background: T.surface50, borderRadius: 12 }}>
             No members match “{query.trim()}”{type ? ` in ${type}` : ''}. Check the spelling or try your membership ID.
@@ -931,7 +1227,7 @@ function FindMember({ onSelect }: { onSelect: (m: Member) => void }) {
                 <MemberAvatar m={m} size={40}/>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14, color: T.ink900, lineHeight: 1.3 }}>{m.name}</div>
-                  <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>{memberId(m)} · {m.tier}</div>
+                  <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>{m.memberNo} · {m.tier}</div>
                 </div>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.ink200} strokeWidth="2.2"><polyline points="9 18 15 12 9 6"/></svg>
               </button>
@@ -943,7 +1239,8 @@ function FindMember({ onSelect }: { onSelect: (m: Member) => void }) {
   )
 }
 
-// ─── Step 2 — verify by OTP ───────────────────────────────────────────────────
+type Channel = 'phone' | 'email'
+
 function OtpInput({ value, onChange, error }: { value: string; onChange: (v: string) => void; error: boolean }) {
   const refs = useRef<(HTMLInputElement | null)[]>([])
   const set = (v: string) => onChange(v.replace(/\D/g, '').slice(0, OTP_LENGTH))
@@ -982,8 +1279,8 @@ function OtpInput({ value, onChange, error }: { value: string; onChange: (v: str
   )
 }
 
-function VerifyMember({ member, onBack, onVerified }: { member: Member; onBack: () => void; onVerified: (via: Channel) => void }) {
-  const [channel, setChannel] = useState<Channel>('phone')
+function VerifyMember({ member, onBack, onVerified }: { member: DuesUiMember; onBack: () => void; onVerified: (via: Channel, sessionMember: DuesUiMember) => void }) {
+  const [channel, setChannel] = useState<Channel>(member.has_phone ? 'phone' : 'email')
   const [sent, setSent] = useState(false)
   const [busy, setBusy] = useState(false)
   const [code, setCode] = useState('')
@@ -996,43 +1293,64 @@ function VerifyMember({ member, onBack, onVerified }: { member: Member; onBack: 
     return () => window.clearTimeout(id)
   }, [resendIn])
 
-  const destination = channel === 'phone' ? maskedPhone(member) : maskedEmail(member)
+  const destination = channel === 'phone' ? member.phone_masked : member.email_masked
 
-  const sendCode = () => {
+  const sendCode = async () => {
     setBusy(true)
     setError('')
-    window.setTimeout(() => { setBusy(false); setSent(true); setCode(''); setResendIn(RESEND_SECONDS) }, 1100)
-  }
-
-  const verify = () => {
-    setBusy(true)
-    window.setTimeout(() => {
+    try {
+      await sendDuesOtp(member.id, channel)
+      setSent(true)
+      setCode('')
+      setResendIn(RESEND_SECONDS)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not send OTP')
+    } finally {
       setBusy(false)
-      if (code === DEMO_OTP) onVerified(channel)
-      else { setError('That code is incorrect. Check it and try again.'); setCode('') }
-    }, 900)
+    }
   }
 
-  const channels: { id: Channel; label: string; icon: React.ReactNode }[] = [
-    { id: 'phone', label: 'Text message', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="6" y="2" width="12" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg> },
-    { id: 'email', label: 'Email', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22 6 12 13 2 6"/></svg> },
+  const verify = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const data = await verifyDuesOtp(member.id, channel, code)
+      const sm = data.member
+      onVerified(channel, {
+        ...member,
+        name: sm.full_name || member.name,
+        memberNo: sm.member_no || member.memberNo,
+        tier: sm.membership_type || member.tier,
+        avatar: duesPhoto(sm.photo_url) || member.avatar,
+        designation: sm.designation || undefined,
+        company: sm.company || undefined,
+      })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Verification failed')
+      setCode('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const channels: { id: Channel; label: string; icon: React.ReactNode; enabled: boolean }[] = [
+    { id: 'phone', label: 'Text message', enabled: member.has_phone, icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="6" y="2" width="12" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg> },
+    { id: 'email', label: 'Email', enabled: member.has_email, icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22 6 12 13 2 6"/></svg> },
   ]
 
   return (
     <div style={gateCard}>
       <GateSteps step={2}/>
-
       <button onClick={sent ? () => { setSent(false); setError('') } : onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'CKCL', fontSize: 12.5, fontWeight: 600, color: T.ink400, background: 'none', border: 'none', padding: 0, cursor: 'pointer', marginBottom: 16 }}>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="11 6 5 12 11 18"/></svg>
         {sent ? 'Use a different method' : 'Change member'}
       </button>
 
-      {/* Selected member */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, background: T.surface50, border: `1px solid ${T.ink100}`, borderRadius: 14, marginBottom: 22 }}>
         <MemberAvatar m={member} size={44}/>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 14.5, color: T.ink900 }}>{member.name}</div>
-          <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>{memberId(member)} · {member.tier}</div>
+          <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 2 }}>{member.memberNo} · {member.tier}</div>
         </div>
       </div>
 
@@ -1040,7 +1358,6 @@ function VerifyMember({ member, onBack, onVerified }: { member: Member; onBack: 
         <>
           <h2 style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 20, color: T.ink900, margin: '0 0 6px' }}>Verify it's you.</h2>
           <p style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, lineHeight: 1.6, margin: '0 0 16px' }}>We'll send a one-time code to the contact on your membership record.</p>
-
           <div role="radiogroup" aria-label="Send code by" className="grid grid-cols-1 sm:grid-cols-2 gap-2.5" style={{ marginBottom: 20 }}>
             {channels.map((c) => {
               const on = channel === c.id
@@ -1049,19 +1366,20 @@ function VerifyMember({ member, onBack, onVerified }: { member: Member; onBack: 
                   key={c.id}
                   role="radio"
                   aria-checked={on}
-                  onClick={() => setChannel(c.id)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', textAlign: 'left', background: on ? T.brandDim : '#FFFFFF', border: `1.5px solid ${on ? T.brand : T.ink100}`, borderRadius: 14, cursor: 'pointer', color: on ? T.brand : T.ink400, boxShadow: on ? '0 0 0 3px rgba(225,11,23,0.10)' : 'none', transition: 'all 160ms', minWidth: 0 }}
+                  disabled={!c.enabled}
+                  onClick={() => c.enabled && setChannel(c.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', textAlign: 'left', background: on ? T.brandDim : '#FFFFFF', border: `1.5px solid ${on ? T.brand : T.ink100}`, borderRadius: 14, cursor: c.enabled ? 'pointer' : 'not-allowed', color: on ? T.brand : T.ink400, boxShadow: on ? '0 0 0 3px rgba(225,11,23,0.10)' : 'none', transition: 'all 160ms', minWidth: 0, opacity: c.enabled ? 1 : 0.45 }}
                 >
                   {c.icon}
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: 'block', fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: T.ink900 }}>{c.label}</span>
-                    <span style={{ display: 'block', fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.id === 'phone' ? maskedPhone(member) : maskedEmail(member)}</span>
+                    <span style={{ display: 'block', fontFamily: 'CKCL', fontSize: 12, color: T.ink400, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.id === 'phone' ? (member.phone_masked || 'Not on file') : (member.email_masked || 'Not on file')}</span>
                   </span>
                 </button>
               )
             })}
           </div>
-
+          {error && <div role="alert" style={{ fontFamily: 'CKCL', fontSize: 12.5, color: T.brand, marginBottom: 12 }}>{error}</div>}
           <button onClick={sendCode} disabled={busy} style={primaryBtn(busy)}>
             {busy ? <><Spinner/> Sending…</> : 'Send OTP'}
           </button>
@@ -1072,16 +1390,12 @@ function VerifyMember({ member, onBack, onVerified }: { member: Member; onBack: 
           <p style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400, lineHeight: 1.6, margin: '0 0 18px' }}>
             We sent a {OTP_LENGTH}-digit code to <strong style={{ color: T.ink900, fontWeight: 600 }}>{destination}</strong>.
           </p>
-
           <OtpInput value={code} onChange={(v) => { setCode(v); setError('') }} error={!!error}/>
           {error && <div role="alert" style={{ fontFamily: 'CKCL', fontSize: 12.5, color: T.brand, marginTop: 10 }}>{error}</div>}
-
           <button onClick={verify} disabled={busy || code.length < OTP_LENGTH} style={{ ...primaryBtn(busy || code.length < OTP_LENGTH), marginTop: 20 }}>
             {busy ? <><Spinner/> Verifying…</> : 'Verify & continue'}
           </button>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
-            <span style={{ fontFamily: 'CKCL', fontSize: 11.5, color: T.ink200 }}>Demo code: {DEMO_OTP}</span>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: 14 }}>
             <button onClick={sendCode} disabled={resendIn > 0 || busy} style={{ fontFamily: 'CKCL', fontSize: 12.5, fontWeight: 600, color: resendIn > 0 ? T.ink200 : T.brand, background: 'none', border: 'none', padding: 0, cursor: resendIn > 0 ? 'default' : 'pointer' }}>
               {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code'}
             </button>
@@ -1092,8 +1406,7 @@ function VerifyMember({ member, onBack, onVerified }: { member: Member; onBack: 
   )
 }
 
-// ─── Verified member summary — top of the statement ───────────────────────────
-function MemberSummary({ member, via, onSignOut }: { member: Member; via: Channel; onSignOut: () => void }) {
+function MemberSummary({ member, via, onSignOut }: { member: DuesUiMember; via: Channel; onSignOut: () => void }) {
   return (
     <div style={{ background: '#FFFFFF', border: '1px solid rgba(185,139,67,0.30)', borderRadius: 20, padding: 'clamp(18px,2.5vw,24px)', marginBottom: 28, boxShadow: '0 4px 20px rgba(14,17,22,0.05)' }}>
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
@@ -1102,21 +1415,20 @@ function MemberSummary({ member, via, onSignOut }: { member: Member; via: Channe
           <div style={{ minWidth: 0 }}>
             <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 'clamp(17px,2vw,21px)', color: T.ink900, lineHeight: 1.2, letterSpacing: '-0.01em' }}>{member.name}</div>
             <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400, marginTop: 3, lineHeight: 1.45 }}>
-              {member.designation}, {member.company}
+              {[member.designation, member.company].filter(Boolean).join(', ') || member.tier}
             </div>
             <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 8 }}>
               <TierChip tier={member.tier}/>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'CKCL', fontWeight: 500, fontSize: 9, letterSpacing: '0.07em', color: T.green, background: T.greenDim, border: `1px solid ${T.green}30`, borderRadius: 999, padding: '4px 9px' }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: T.green }}/>ACTIVE
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: T.green }}/>VERIFIED
               </span>
             </div>
           </div>
         </div>
-
         <div className="flex sm:flex-col items-center sm:items-end justify-between gap-2 border-t border-[#E2E6EC] pt-3 sm:border-t-0 sm:pt-0">
           <div className="sm:text-right">
             <div className="eyebrow" style={{ fontSize: 9, color: T.ink200 }}>MEMBERSHIP ID</div>
-            <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 15, color: T.ink900, letterSpacing: '0.04em', marginTop: 2 }}>{memberId(member)}</div>
+            <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 15, color: T.ink900, letterSpacing: '0.04em', marginTop: 2 }}>{member.memberNo}</div>
           </div>
           <button onClick={onSignOut} style={{ fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: T.ink400, background: T.surface50, border: `1px solid ${T.ink100}`, borderRadius: 999, padding: '7px 14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
             Not you? Sign out
@@ -1131,15 +1443,15 @@ function MemberSummary({ member, via, onSignOut }: { member: Member; via: Channe
   )
 }
 
-type DuesAccess = { member: Member; via: Channel } | null
+type DuesAccess = { member: DuesUiMember; via: Channel } | null
 
 function DuesGate({ access, onAccess }: { access: DuesAccess; onAccess: (a: DuesAccess) => void }) {
-  const [selected, setSelected] = useState<Member | null>(null)
+  const [selected, setSelected] = useState<DuesUiMember | null>(null)
 
   if (access) {
     return (
       <>
-        <MemberSummary member={access.member} via={access.via} onSignOut={() => { onAccess(null); setSelected(null) }}/>
+        <MemberSummary member={access.member} via={access.via} onSignOut={() => { setDuesToken(null); onAccess(null); setSelected(null) }}/>
         <DuesSection/>
       </>
     )
@@ -1150,9 +1462,10 @@ function DuesGate({ access, onAccess }: { access: DuesAccess; onAccess: (a: Dues
         .dues-field:focus { border-color: ${T.ink400} !important; background: #FFFFFF !important; box-shadow: 0 0 0 3px rgba(14,17,22,0.06); }
         .dues-result:hover { background: ${T.surface50} !important; }
         .dues-field::-webkit-search-cancel-button { cursor: pointer; }
+        @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
       {selected
-        ? <VerifyMember member={selected} onBack={() => setSelected(null)} onVerified={(via) => onAccess({ member: selected, via })}/>
+        ? <VerifyMember member={selected} onBack={() => setSelected(null)} onVerified={(via, m) => onAccess({ member: m, via })}/>
         : <FindMember onSelect={setSelected}/>}
     </>
   )

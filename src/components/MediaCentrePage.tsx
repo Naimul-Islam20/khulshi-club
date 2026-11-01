@@ -1,7 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Footer from './Footer'
 import SubTabs from './SubTabs'
-import { useApi } from '../lib/useApi'
+import {
+  useNotices,
+  useNewsList,
+  useNewsDetail,
+  useAlbums,
+  useAlbumDetail,
+  useVideos,
+  type NoticeEntry,
+  type AlbumEntry,
+  type AlbumDetailData,
+  type Article,
+  type VideoEntry,
+} from '../lib/media'
 
 // ─── Tokens ───────────────────────────────────────────────────────────────────
 const T = {
@@ -10,9 +22,7 @@ const T = {
   brand: '#E10B17', brass: '#B98B43',
 }
 
-// ─── Data (from the CKCL backend: /api/media/*) ──────────────────────────────
-type NoticeEntry = { id: number; date: string; year: string; month: string; title: string; bangla: boolean; category: string; fileType: string | null; size: string | null; file_url: string | null }
-
+// ─── Data (club-portal/website/media/*) ───────────────────────────────────────
 const CATEGORY_COLORS: Record<string, { bg: string; color: string }> = {
   'Meeting':       { bg: '#EFF6FF', color: '#1D4ED8' },
   'Payment':       { bg: '#FFF7E6', color: '#B98B43' },
@@ -21,18 +31,11 @@ const CATEGORY_COLORS: Record<string, { bg: string; color: string }> = {
 }
 const catColorOf = (c: string) => CATEGORY_COLORS[c] ?? { bg: '#F3F4F6', color: '#4B5563' }
 
-type AlbumEntry = { id: number; slug: string; name: string; count: number; year: string | null; cover: string | null }
-type AlbumDetailData = AlbumEntry & { photos: { id: number; src: string; caption: string | null }[] }
-
-type Article = { id: number; slug: string; title: string; date: string; category: string; excerpt: string | null; image: string | null; featured?: boolean; body?: string[] }
-
 const CATEGORY_CHIP_COLORS: Record<string, { bg: string; color: string }> = {
   'Event':        { bg: '#FFF1F2', color: '#E10B17' },
   'Announcement': { bg: '#EFF6FF', color: '#1D4ED8' },
   'Club News':    { bg: '#DCFCE7', color: '#16A34A' },
 }
-
-type VideoEntry = { id: number; title: string; date: string; duration: string | null; thumb: string | null; description: string | null; video_url: string | null; embed_url: string | null }
 
 // ─── Loading / empty / error states ───────────────────────────────────────────
 function StateBox({ children }: { children: React.ReactNode }) {
@@ -223,7 +226,7 @@ function NoticesSection() {
   const [catFilter, setCatFilter] = useState<string>('All')
   const [search, setSearch] = useState('')
   const [viewing, setViewing] = useState<NoticeEntry | null>(null)
-  const { data, error, loading, reload } = useApi<{ notices: NoticeEntry[]; categories: string[]; years: string[] }>('/media/notices')
+  const { data, error, loading, reload } = useNotices()
 
   if (!data) return loading ? <Loading /> : <LoadError message={error || 'Could not load notices.'} onRetry={reload} />
 
@@ -376,7 +379,7 @@ function NoticesSection() {
 // NEWS & EVENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 function ArticleDetail({ article: summary, onBack, onOpen }: { article: Article; onBack: () => void; onOpen: (a: Article) => void }) {
-  const { data } = useApi<{ article: Article; related: Article[] }>(`/media/news/${summary.slug}`)
+  const { data } = useNewsDetail(summary.slug)
   const article = data?.article ?? summary
   const related = data?.related ?? []
   const cc = CATEGORY_CHIP_COLORS[article.category] ?? { bg: T.surface100, color: T.ink400 }
@@ -460,7 +463,7 @@ function ArticleDetail({ article: summary, onBack, onOpen }: { article: Article;
 
 function NewsSection() {
   const [viewing, setViewing] = useState<Article | null>(null)
-  const { data, error, loading, reload } = useApi<{ featured: Article | null; articles: Article[] }>('/media/news')
+  const { data, error, loading, reload } = useNewsList()
   if (viewing) return <ArticleDetail key={viewing.slug} article={viewing} onBack={() => setViewing(null)} onOpen={setViewing} />
   if (!data) return loading ? <Loading /> : <LoadError message={error || 'Could not load news.'} onRetry={reload} />
   if (!data.featured) return <StateBox>No news has been published yet.</StateBox>
@@ -598,7 +601,7 @@ function Lightbox({ state, onChange, onClose }: { state: NonNullable<LightboxSta
 function AlbumDetail({ album: summary, onBack }: { album: AlbumEntry; onBack: () => void }) {
   const [lightbox, setLightbox] = useState<number | null>(null)
   const headerRef = useRef<HTMLDivElement>(null)
-  const { data, error, loading, reload } = useApi<{ album: AlbumDetailData }>(`/media/albums/${summary.slug}`)
+  const { data, error, loading, reload } = useAlbumDetail(summary.slug)
   const album = data?.album
 
   return (
@@ -655,7 +658,7 @@ function AlbumDetail({ album: summary, onBack }: { album: AlbumEntry; onBack: ()
 
 function GallerySection() {
   const [selectedAlbum, setSelectedAlbum] = useState<AlbumEntry | null>(null)
-  const { data, error, loading, reload } = useApi<{ albums: AlbumEntry[] }>('/media/albums')
+  const { data, error, loading, reload } = useAlbums()
 
   if (selectedAlbum) return <AlbumDetail album={selectedAlbum} onBack={() => setSelectedAlbum(null)} />
   if (!data) return loading ? <Loading /> : <LoadError message={error || 'Could not load the gallery.'} onRetry={reload} />
@@ -770,7 +773,7 @@ function VideoModal({ video, onClose }: { video: VideoEntry; onClose: () => void
 function VideoSection() {
   const [playing, setPlaying] = useState<VideoEntry | null>(null)
   const [hovered, setHovered] = useState<number | null>(null)
-  const { data, error, loading, reload } = useApi<{ videos: VideoEntry[] }>('/media/videos')
+  const { data, error, loading, reload } = useVideos()
 
   if (!data) return loading ? <Loading /> : <LoadError message={error || 'Could not load videos.'} onRetry={reload} />
   if (!data.videos.length) return <StateBox>No videos yet.</StateBox>

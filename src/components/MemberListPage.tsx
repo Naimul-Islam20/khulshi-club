@@ -1,16 +1,37 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import Footer from './Footer'
-import { MEMBERS, type Member, type MemberTier } from '../data/members'
+import { useDirectoryList, type DirectoryMember } from '../lib/directory'
+import { useSiteInfo } from '../lib/siteInfo'
+
+export type MemberTier = string
+export type Member = {
+  id: string
+  name: string
+  designation: string
+  company: string
+  tier: MemberTier
+  avatar: string | null
+}
+
+function toMember(m: DirectoryMember): Member {
+  return {
+    id: m.id,
+    name: m.full_name,
+    designation: m.designation || m.profession || '',
+    company: m.company || '',
+    tier: m.membership_type || 'Member',
+    avatar: m.photo_url ?? null,
+  }
+}
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 const PAGE_SIZE = 12
-const TIER_OPTIONS: MemberTier[] = ['Founding Member', 'Life Member', 'General Member']
-const COMPANY_OPTIONS = [...new Set(MEMBERS.map((m) => m.company))].sort()
 
-const TIER_COLORS: Record<MemberTier, { bg: string; color: string }> = {
-  'Founding Member': { bg: '#FFF7E6', color: '#B98B43' },
-  'Life Member':     { bg: '#FFF1F2', color: '#E10B17' },
-  'General Member':  { bg: '#EEF1F5', color: '#5C6673' },
+function tierStyle(tier: string): { bg: string; color: string } {
+  const t = tier.toLowerCase()
+  if (t.includes('found')) return { bg: '#FFF7E6', color: '#B98B43' }
+  if (t.includes('life')) return { bg: '#FFF1F2', color: '#E10B17' }
+  return { bg: '#EEF1F5', color: '#5C6673' }
 }
 
 // ─── Avatar ────────────────────────────────────────────────────────────────────
@@ -54,8 +75,9 @@ function Avatar({ src, name, size = 72 }: { src: string | null; name: string; si
 
 // ─── Grid card ────────────────────────────────────────────────────────────────
 function MemberGridCard({ member }: { member: Member }) {
+  const site = useSiteInfo()
   const [hovered, setHovered] = useState(false)
-  const tierStyle = TIER_COLORS[member.tier]
+  const style = tierStyle(member.tier)
 
   return (
     <div
@@ -76,7 +98,7 @@ function MemberGridCard({ member }: { member: Member }) {
         overflow: 'hidden',
       }}
     >
-      {/* CKCL watermark */}
+      {/* Club short-name watermark (Site Info) */}
       <div
         style={{
           position: 'absolute', inset: 0,
@@ -86,7 +108,7 @@ function MemberGridCard({ member }: { member: Member }) {
           pointerEvents: 'none', userSelect: 'none',
         }}
       >
-        CKCL
+        {site.short_name || ''}
       </div>
 
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
@@ -99,9 +121,9 @@ function MemberGridCard({ member }: { member: Member }) {
             fontWeight: 500,
             fontSize: 9,
             letterSpacing: '0.08em',
-            color: tierStyle.color,
-            background: tierStyle.bg,
-            border: `1px solid ${tierStyle.color}40`,
+            color: style.color,
+            background: style.bg,
+            border: `1px solid ${style.color}40`,
             borderRadius: 999,
             padding: '4px 10px',
           }}
@@ -221,7 +243,7 @@ function MemberListView({
 
       {/* Rows */}
       {members.map((m, i) => {
-        const tierStyle = TIER_COLORS[m.tier]
+        const ts = tierStyle(m.tier)
         return (
           <div
             key={m.id}
@@ -241,7 +263,7 @@ function MemberListView({
                 <span
                   style={{
                     fontFamily: 'CKCL', fontWeight: 500, fontSize: 8.5, letterSpacing: '0.07em',
-                    color: tierStyle.color, background: tierStyle.bg, border: `1px solid ${tierStyle.color}40`,
+                    color: ts.color, background: ts.bg, border: `1px solid ${ts.color}40`,
                     borderRadius: 999, padding: '3px 8px', whiteSpace: 'nowrap',
                   }}
                 >
@@ -278,9 +300,9 @@ function MemberListView({
                   fontWeight: 500,
                   fontSize: 9,
                   letterSpacing: '0.07em',
-                  color: tierStyle.color,
-                  background: tierStyle.bg,
-                  border: `1px solid ${tierStyle.color}40`,
+                  color: ts.color,
+                  background: ts.bg,
+                  border: `1px solid ${ts.color}40`,
                   borderRadius: 999,
                   padding: '4px 9px',
                   whiteSpace: 'nowrap',
@@ -521,12 +543,14 @@ function FilterBar({
   companyFilter, onCompanyFilter,
   resultCount, totalCount,
   viewMode, onViewMode,
+  tierOptions, companyOptions,
 }: {
   search: string; onSearch: (v: string) => void
   tierFilter: string; onTierFilter: (v: string) => void
   companyFilter: string; onCompanyFilter: (v: string) => void
   resultCount: number; totalCount: number
   viewMode: 'grid' | 'list'; onViewMode: (v: 'grid' | 'list') => void
+  tierOptions: string[]; companyOptions: string[]
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -585,8 +609,8 @@ function FilterBar({
         </div>
 
         {/* Dropdowns */}
-        <Select value={tierFilter} onChange={onTierFilter} options={TIER_OPTIONS} placeholder="Membership Type" />
-        <Select value={companyFilter} onChange={onCompanyFilter} options={COMPANY_OPTIONS} placeholder="Company" />
+        <Select value={tierFilter} onChange={onTierFilter} options={tierOptions} placeholder="Membership Type" />
+        <Select value={companyFilter} onChange={onCompanyFilter} options={companyOptions} placeholder="Company" />
 
         {/* Result count */}
         <div
@@ -707,33 +731,42 @@ export default function MemberListPage() {
   const [page, setPage] = useState(1)
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const [loading, setLoading] = useState(true)
 
-  // Simulate brief loading on mount
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 900)
-    return () => clearTimeout(t)
-  }, [])
-
-  // Reset to page 1 when filters change
   useEffect(() => { setPage(1) }, [search, tierFilter, companyFilter, viewMode])
 
+  const { members: apiMembers, total, lastPage, loading, error } = useDirectoryList({
+    q: search,
+    page,
+    per_page: PAGE_SIZE,
+  })
+
+  const allForFilters = useMemo(() => apiMembers.map(toMember), [apiMembers])
+
+  const { members: allMembersPage } = useDirectoryList({ q: '', page: 1, per_page: 100 })
+  const catalog = useMemo(() => allMembersPage.map(toMember), [allMembersPage])
+  const TIER_OPTIONS = useMemo(
+    () => [...new Set(catalog.map((m) => m.tier).filter(Boolean))].sort(),
+    [catalog],
+  )
+  const COMPANY_OPTIONS = useMemo(
+    () => [...new Set(catalog.map((m) => m.company).filter(Boolean))].sort(),
+    [catalog],
+  )
+
   const filtered = useMemo(() => {
-    const q = search.toLowerCase()
-    return MEMBERS.filter((m) => {
-      if (q && !m.name.toLowerCase().includes(q) && !m.company.toLowerCase().includes(q)) return false
-      if (tierFilter && m.tier !== tierFilter) return false
-      if (companyFilter && m.company !== companyFilter) return false
-      return true
-    }).sort((a, b) => {
-      const av = a[sortKey].toLowerCase()
-      const bv = b[sortKey].toLowerCase()
+    let rows = allForFilters
+    if (tierFilter) rows = rows.filter((m) => m.tier === tierFilter)
+    if (companyFilter) rows = rows.filter((m) => m.company === companyFilter)
+    return rows.slice().sort((a, b) => {
+      const av = String(a[sortKey] || '').toLowerCase()
+      const bv = String(b[sortKey] || '').toLowerCase()
       return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
     })
-  }, [search, tierFilter, companyFilter, sortKey, sortDir])
+  }, [allForFilters, tierFilter, companyFilter, sortKey, sortDir])
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  // Server already paginates by search; client filters may shrink page — show filtered page slice
+  const totalPages = Math.max(lastPage, Math.ceil((tierFilter || companyFilter ? filtered.length : total) / PAGE_SIZE) || 1)
+  const paginated = (tierFilter || companyFilter) ? filtered.slice(0, PAGE_SIZE) : filtered
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -760,11 +793,16 @@ export default function MemberListPage() {
         tierFilter={tierFilter} onTierFilter={setTierFilter}
         companyFilter={companyFilter} onCompanyFilter={setCompanyFilter}
         resultCount={filtered.length}
-        totalCount={MEMBERS.length}
+        totalCount={total || catalog.length}
         viewMode={viewMode} onViewMode={setViewMode}
+        tierOptions={TIER_OPTIONS}
+        companyOptions={COMPANY_OPTIONS}
       />
 
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: 'clamp(40px,5vw,64px) clamp(24px,5vw,80px)' }}>
+        {error && (
+          <div style={{ marginBottom: 16, fontFamily: 'CKCL', fontSize: 13, color: '#E10B17' }}>{error}</div>
+        )}
         {loading ? (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-5">
             {Array.from({ length: PAGE_SIZE }).map((_, i) => <SkeletonCard key={i} />)}

@@ -25,6 +25,8 @@ export type WebsiteSiteInfoRaw = {
   about_text?: string | null
   established_year?: string | null
   trade_license?: string | null
+  govt_reg_no?: string | null
+  helpdesk_reply_note?: string | null
   logo?: string | null
   favicon?: string | null
   share_image?: string | null

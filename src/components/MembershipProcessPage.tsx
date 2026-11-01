@@ -1,22 +1,21 @@
 import { createContext, useContext, useId, useState, type ReactNode } from 'react'
 import Footer from './Footer'
-import { useApi } from '../lib/useApi'
+import { useMembership, type MembershipProcess, type MembershipTier } from '../lib/membership'
+import { useSiteInfo } from '../lib/siteInfo'
+import { usePortalClubSettings, type PortalMembershipType } from '../lib/apply'
 
 // ─── Live content (Admin → Membership → Membership Process) ───────────────────
-// The arrays further down are the built-in copy, used only if the server can't be reached.
-type ApiStep = { num: string; title: string; desc: string; duration: string | null; icon: string }
-type ProcessData = {
-  intro_lead: string | null
-  intro_note: string | null
-  steps: { num: string; title: string; desc: string; duration: string | null; icon: ReactNode | string }[]
-  tiers: Tier[]
-  documents: { item: string; required: boolean }[]
-  documents_note: string | null
-  faqs: { q: string; a: string }[]
-  application_form_url: string | null
-  cta_title: string | null
-  cta_text: string | null
-  contact_line: string | null
+type ProcessData = MembershipProcess
+type Tier = MembershipTier
+
+/** "Life Member" / "life" → "life", so a CMS tier can be matched to an ERP membership type. */
+const tierKey = (name: string) => name.toLowerCase().replace(/\bmembers?(hip)?\b/g, '').replace(/\s+/g, ' ').trim()
+
+/** The ERP membership type (with its fee package) whose name matches this tier, if any. */
+function matchMembershipType(tierName: string, types: PortalMembershipType[]): PortalMembershipType | undefined {
+  const key = tierKey(tierName)
+  if (!key) return undefined
+  return types.find((t) => tierKey(t.name) === key)
 }
 
 const STEP_ICON_PATHS: Record<string, ReactNode> = {
@@ -38,7 +37,9 @@ const ProcessCtx = createContext<ProcessData | null>(null)
 const useProcess = () => useContext(ProcessCtx)!
 
 // ─── Page header ──────────────────────────────────────────────────────────────
-function PageHeader() {
+function PageHeader({ title }: { title?: string }) {
+  const site = useSiteInfo()
+  const clubName = site.short_name || site.club_name
   return (
     <div
       style={{
@@ -68,69 +69,15 @@ function PageHeader() {
       </div>
       <div className="eyebrow mb-3" style={{ fontSize: 11, color: '#B98B43', position: 'relative', zIndex: 1 }}>MEMBERSHIP</div>
       <h1 style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 'clamp(32px,4vw,56px)', lineHeight: 1.05, letterSpacing: '-0.02em', color: '#0E1116', margin: 0, position: 'relative', zIndex: 1 }}>
-        How to join<br/>Khulshi Club.
+        {title
+          ? title.split('\n').map((line, i) => <span key={i}>{i > 0 && <br/>}{line}</span>)
+          : <>How to join{clubName ? <><br/>{clubName}.</> : '.'}</>}
       </h1>
     </div>
   )
 }
 
 // ─── Timeline steps ────────────────────────────────────────────────────────────
-const STEPS = [
-  {
-    num: '01',
-    title: 'Submit Your Application',
-    desc: 'Download and complete the official CKCL Membership Application Form. Fill in your personal and professional details, then obtain signatures from two existing CKCL members willing to act as your referees. Submit the completed form and supporting documents to the Club Secretary in person or by post.',
-    duration: '1–2 days',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E10B17" strokeWidth="2">
-        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
-        <line x1="16" y1="13" x2="8" y2="13"/>
-        <line x1="16" y1="17" x2="8" y2="17"/>
-        <polyline points="10 9 9 9 8 9"/>
-      </svg>
-    ),
-  },
-  {
-    num: '02',
-    title: 'Document Verification',
-    desc: 'The Club Secretariat reviews your submitted documents for completeness and validity. You may be contacted to provide additional information or to clarify any details. This step ensures all applications entering Committee review are complete and properly supported.',
-    duration: '3–5 days',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E10B17" strokeWidth="2">
-        <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
-        <polyline points="22 4 12 14.01 9 11.01"/>
-      </svg>
-    ),
-  },
-  {
-    num: '03',
-    title: 'Executive Committee Review',
-    desc: 'The Executive Committee reviews all verified applications at its monthly sitting. Candidates may be invited for an introductory meeting with Committee members before a decision is reached. The Committee votes by simple majority; all decisions are final. You will be notified in writing within seven days of the meeting.',
-    duration: '2–4 weeks',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E10B17" strokeWidth="2">
-        <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
-        <circle cx="9" cy="7" r="4"/>
-        <path d="M23 21v-2a4 4 0 00-3-3.87"/>
-        <path d="M16 3.13a4 4 0 010 7.75"/>
-      </svg>
-    ),
-  },
-  {
-    num: '04',
-    title: 'Welcome & Card Issuance',
-    desc: 'On approval, you will receive a formal welcome letter from the President. Pay the Admission Fee and your first Annual Subscription within 14 days of approval. Your CKCL Membership Card is then prepared and issued within 7 working days — from that moment, all facilities and member benefits are available to you.',
-    duration: '7 working days',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E10B17" strokeWidth="2">
-        <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
-        <line x1="1" y1="10" x2="23" y2="10"/>
-      </svg>
-    ),
-  },
-]
-
 function Timeline() {
   const STEPS = useProcess().steps
   return (
@@ -242,94 +189,6 @@ function Timeline() {
 
 // ─── Membership tier cards ─────────────────────────────────────────────────────
 // Card-shaped tiers: the front is the "membership card", Details flips it to the terms on the back.
-type Tier = {
-  name: string
-  tagline: string
-  term: string
-  eligibility: string
-  entitlements: string[]
-  // Front gradient, from → to
-  colors: [string, string]
-  // Not open to applications — the card back has no Apply Now
-  closed?: boolean
-}
-
-const TIERS: Tier[] = [
-  {
-    name: 'Founding Member',
-    tagline: 'The members who established the club in 2013',
-    term: 'Lifetime',
-    eligibility: "Reserved for the club's founders. This category is closed to new applications.",
-    entitlements: ['Full access to all facilities', 'No annual renewal required', 'Voting rights at AGM', 'Eligible for the Executive Committee'],
-    colors: ['#2E2210', '#A8823F'],
-    closed: true,
-  },
-  {
-    name: 'Life Member',
-    tagline: 'Permanent membership, one-time fee',
-    term: 'Lifetime',
-    eligibility: 'Individuals of standing, proposed and seconded by two members.',
-    entitlements: ['Full access to all facilities', 'No annual renewal required', 'Voting rights at AGM', 'Eligible for the Executive Committee'],
-    colors: ['#7A0710', '#E10B17'],
-  },
-  {
-    name: 'Permanent Member',
-    tagline: 'Long-term membership, annual subscription',
-    term: 'Ongoing · annual subscription',
-    eligibility: 'Residents of Chattogram, proposed and seconded by two members.',
-    entitlements: ['Full access to all facilities', 'Priority facility booking', 'Voting rights at AGM', 'Guest pass privileges'],
-    colors: ['#0E1116', '#3A424D'],
-  },
-  {
-    name: 'Donor Member',
-    tagline: 'In recognition of a major contribution',
-    term: 'Lifetime',
-    eligibility: 'By donation to the club, approved by the Executive Committee.',
-    entitlements: ['Full access to all facilities', "Name on the Donors' Board", 'Priority booking for Convention Hall', 'Invitations to patron events'],
-    colors: ['#6B4C1E', '#B98B43'],
-  },
-  {
-    name: 'Service Member',
-    tagline: 'For serving officers in government service',
-    term: 'Duration of service posting',
-    eligibility: 'Serving officers of the armed forces and civil service posted in Chattogram.',
-    entitlements: ['Full access to all facilities', 'Reduced entrance fee', 'Guest pass privileges', 'May convert to Permanent membership'],
-    colors: ['#0F2742', '#245A8F'],
-  },
-  {
-    name: 'Temporary Member',
-    tagline: 'Short-term access for new arrivals',
-    term: 'Up to 1 year, renewable',
-    eligibility: 'Professionals temporarily based in Chattogram, sponsored by a member.',
-    entitlements: ['Full access to all facilities', 'Standard booking priority', 'No voting rights', 'Renewable at committee discretion'],
-    colors: ['#3B4552', '#6B7684'],
-  },
-  {
-    name: 'Honorary Member',
-    tagline: 'Conferred by the Executive Committee',
-    term: 'As conferred',
-    eligibility: 'By invitation only, for distinguished service to the club or community.',
-    entitlements: ['Full access to all facilities', 'No entrance fee or subscription', 'Invitations to club functions', 'Non-voting membership'],
-    colors: ['#2B1640', '#62408F'],
-  },
-  {
-    name: 'Corporate Member',
-    tagline: 'For companies and their nominees',
-    term: 'Annual, renewable',
-    eligibility: 'Registered companies, with named nominees approved by the committee.',
-    entitlements: ['Access for nominated representatives', 'Corporate rates for Convention Hall', 'Host business events and meetings', 'Nominees replaceable on renewal'],
-    colors: ['#08332F', '#167066'],
-  },
-  {
-    name: 'Diplomat Member',
-    tagline: 'For the diplomatic and consular corps',
-    term: 'Duration of posting',
-    eligibility: 'Accredited diplomatic and consular officers stationed in Bangladesh.',
-    entitlements: ['Full access to all facilities', 'Spouse included in membership', 'Reciprocal club privileges', 'Non-voting membership'],
-    colors: ['#122B3A', '#2F6A82'],
-  },
-]
-
 // Small caps label over a value, as on the member portal card
 function CardField({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -365,6 +224,10 @@ function BackSection({ title, children }: { title: string; children: ReactNode }
 }
 
 function TierCard({ tier, onApply }: { tier: Tier; onApply: () => void }) {
+  const site = useSiteInfo()
+  // Fees come from the matching membership type's fee package (club-portal/settings)
+  const { data: clubSettings } = usePortalClubSettings()
+  const fees = matchMembershipType(tier.name, clubSettings?.membership_types || [])?.fees || []
   const [flipped, setFlipped] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [from, to] = tier.colors
@@ -398,8 +261,8 @@ function TierCard({ tier, onApply }: { tier: Tier; onApply: () => void }) {
             {/* Header band: club mark + Details (flips to the back) */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingBottom: '2.6cqw', borderBottom: '1px solid rgba(255,255,255,0.18)' }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 'clamp(14px,5cqw,18px)', letterSpacing: '0.04em', lineHeight: 1 }}>CKCL</div>
-                <div style={{ fontSize: 'clamp(7.5px,2.4cqw,9.5px)', color: 'rgba(255,255,255,0.7)', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Chittagong Khulshi Club Ltd. · Membership Card</div>
+                <div style={{ fontWeight: 700, fontSize: 'clamp(14px,5cqw,18px)', letterSpacing: '0.04em', lineHeight: 1 }}>{site.short_name || site.club_name}</div>
+                <div style={{ fontSize: 'clamp(7.5px,2.4cqw,9.5px)', color: 'rgba(255,255,255,0.7)', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{site.club_name ? `${site.club_name} · ` : ''}Membership Card</div>
               </div>
               <button
                 className="mcard-btn"
@@ -478,7 +341,16 @@ function TierCard({ tier, onApply }: { tier: Tier; onApply: () => void }) {
                 <BackSection title="Term">{tier.term}</BackSection>
                 <BackSection title="Eligibility">{tier.eligibility}</BackSection>
                 <BackSection title="What's included"><Entitlements items={tier.entitlements}/></BackSection>
-                <BackSection title="Fees">Contact the Secretary for current entrance fee and subscription amounts.</BackSection>
+                {fees.length > 0 && (
+                  <BackSection title="Fees">
+                    {fees.map((f, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                        <span>{f.billing && f.billing !== 'one_time' ? `${f.name} (${f.billing})` : f.name}</span>
+                        <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>৳ {Number(f.amount).toLocaleString('en-BD', { maximumFractionDigits: 0 })}</span>
+                      </div>
+                    ))}
+                  </BackSection>
+                )}
               </div>
             ) : (
               <>
@@ -513,16 +385,6 @@ function TierCard({ tier, onApply }: { tier: Tier; onApply: () => void }) {
 }
 
 // ─── Required documents panel ─────────────────────────────────────────────────
-const DOCS = [
-  { required: true,  item: 'Completed CKCL Membership Application Form (original signature)' },
-  { required: true,  item: 'Photocopy of National Identity Card (NID) or valid passport' },
-  { required: true,  item: 'Two passport-sized photographs' },
-  { required: true,  item: 'Reference letter from two existing CKCL members in good standing' },
-  { required: true,  item: 'Proof of business or professional registration (where applicable)' },
-  { required: false, item: 'Corporate seal and letter of authorisation (for corporate memberships)' },
-  { required: false, item: 'Previous club membership letter (if transferring from another club)' },
-]
-
 function DocumentsPanel() {
   const { documents: DOCS, documents_note, application_form_url } = useProcess()
   return (
@@ -610,33 +472,6 @@ function DocumentsPanel() {
 }
 
 // ─── FAQ accordion ─────────────────────────────────────────────────────────────
-const FAQS = [
-  {
-    q: 'How long does the entire membership process take?',
-    a: "The full process — from submission to card issuance — typically takes four to six weeks. The longest variable is the Executive Committee review, which occurs monthly. If your application is received after the monthly cut-off date, it will be reviewed at the following month's sitting. Document verification and card issuance are handled promptly once those stages are reached.",
-  },
-  {
-    q: 'Can I visit the club before applying?',
-    a: "Yes. Current members are welcome to bring prospective applicants as guests for up to three visits. Guest visits do not constitute an endorsement or commit the hosting member to providing a reference. We encourage prospective members to experience the club and speak with existing members before submitting their application.",
-  },
-  {
-    q: 'What happens if my application is not approved?',
-    a: "The Executive Committee does not disclose reasons for declined applications. The Admission Fee is refunded in full within 14 business days of a declined decision. Applicants may reapply after a period of 12 months from the date of the decision.",
-  },
-  {
-    q: "Do I need to know existing members to apply?",
-    a: "Yes — all applications require references from two existing CKCL members in good standing. If you do not yet know any members, we suggest attending one of the club's open events (listed on the News & Events page) as an opportunity to meet the community before applying.",
-  },
-  {
-    q: 'Are memberships transferable or inheritable?',
-    a: "General Memberships are non-transferable and lapse on resignation or termination. Life Memberships may, at the discretion of the Executive Committee, be transferred to a spouse or immediate family member on the death of the member. Founding Memberships are non-transferable.",
-  },
-  {
-    q: 'What are the annual dues and how are they collected?',
-    a: "Annual Subscription amounts are set by the Executive Committee and published in the current Fee Schedule, available from the Club Secretary or on the Member Portal. Dues are due on 1 July each year and must be settled by 30 September to avoid a late-payment surcharge. Payment may be made by bank transfer, bKash or Nagad — details are provided in the annual dues circular.",
-  },
-]
-
 function FAQAccordion() {
   const [open, setOpen] = useState<number>(0)
   const FAQS = useProcess().faqs
@@ -739,7 +574,7 @@ function FAQAccordion() {
 
 // ─── CTA band ─────────────────────────────────────────────────────────────────
 function CTABand() {
-  const { cta_title, cta_text, contact_line, application_form_url } = useProcess()
+  const { cta_title, cta_text, contact_line, contact_label, application_form_url } = useProcess()
   // The last word of the heading is set in italic, as in the original design
   const words = (cta_title || '').trim().split(/\s+/)
   const last = words.length > 1 ? words.pop() : ''
@@ -812,7 +647,7 @@ function CTABand() {
               transition: 'all 160ms',
             }}
           >
-            Contact the Club Secretary
+            {contact_label || 'Contact the club'}
           </a>
         </div>
         <div
@@ -831,26 +666,20 @@ function CTABand() {
 }
 
 // ─── Page shell ───────────────────────────────────────────────────────────────
-const FALLBACK: ProcessData = {
-  intro_lead: 'Joining CKCL is a straightforward but considered process. Membership is by application and referral — not by purchase alone. We take care to ensure every new member is a genuine fit for the community, and that every applicant receives a fair and transparent review.',
-  intro_note: 'The process typically takes four to six weeks from submission to card issuance. The timeline below describes each stage in sequence — and what to expect at each one. Questions? Contact the Club Secretary before you begin.',
-  steps: STEPS,
-  tiers: TIERS,
-  documents: DOCS,
-  documents_note: 'All documents must be originals or certified copies. Incomplete applications will be held and cannot be forwarded to the Executive Committee until all required items are received. Please contact the Club Secretary at info@ckclbd.com with any questions before submitting.',
-  faqs: FAQS,
-  application_form_url: null,
-  cta_title: 'Start your application today.',
-  cta_text: 'Download the application form, gather your documents, and reach out to two existing members for references. The club office is happy to answer any questions before you apply.',
-  contact_line: '+880 1988 896 906 · info@ckclbd.com · Sat–Thu 10:00 AM–6:00 PM',
-}
-
 export default function MembershipProcessPage({ onApply }: { onApply?: () => void }) {
   const apply = () => onApply?.()
-  const { data, error } = useApi<{ process: Omit<ProcessData, 'steps'> & { steps: ApiStep[] } }>('/membership/process')
-  const process: ProcessData | null = data?.process ?? (error ? FALLBACK : null)
+  const { membership, fromApi, loading, error } = useMembership()
+  const process = fromApi ? membership.process : null
+  const hasContent = Boolean(
+    process && (
+      process.steps.length ||
+      process.tiers.length ||
+      process.intro_lead ||
+      process.faqs.length
+    )
+  )
 
-  if (!process) {
+  if (loading && !fromApi) {
     return (
       <div style={{ background: '#F7F8FA', minHeight: '100vh' }}>
         <PageHeader />
@@ -863,11 +692,27 @@ export default function MembershipProcessPage({ onApply }: { onApply?: () => voi
     )
   }
 
+  if (!hasContent || !process) {
+    return (
+      <div style={{ background: '#F7F8FA', minHeight: '100vh' }}>
+        <PageHeader />
+        <div style={{ maxWidth: 1280, margin: '0 auto', padding: 'clamp(48px,6vw,80px) clamp(24px,5vw,80px)' }}>
+          <p style={{ fontFamily: 'CKCL', fontSize: 16, color: error ? '#E10B17' : '#5C6673', lineHeight: 1.6 }}>
+            {error
+              ? 'Could not load membership process.'
+              : 'Membership process content is not published yet. Add it in Website Maintenance → Membership → Membership Process.'}
+          </p>
+        </div>
+        <Footer />
+      </div>
+    )
+  }
+
   const TIERS = process.tiers
   return (
     <ProcessCtx.Provider value={process}>
     <div style={{ background: '#F7F8FA', minHeight: '100vh' }}>
-      <PageHeader />
+      <PageHeader title={process.page_title} />
 
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: 'clamp(48px,6vw,80px) clamp(24px,5vw,80px)' }}>
 
@@ -903,11 +748,15 @@ export default function MembershipProcessPage({ onApply }: { onApply?: () => voi
               marginBottom: 16,
             }}
           >
-            Choose your membership type.
+            {process.tiers_title || 'Choose your membership type.'}
           </h2>
-          <p style={{ fontFamily: 'CKCL', fontSize: 15, lineHeight: 1.65, color: '#5C6673', maxWidth: 520, marginBottom: 40 }}>
-            CKCL offers nine membership categories. Each differs in term, eligibility and privileges — tap Details on any card to see what it includes. Contact the Secretary for current fee amounts.
-          </p>
+          {process.tiers_text ? (
+            <p style={{ fontFamily: 'CKCL', fontSize: 15, lineHeight: 1.65, color: '#5C6673', maxWidth: 520, marginBottom: 40 }}>
+              {process.tiers_text}
+            </p>
+          ) : (
+            <div style={{ marginBottom: 24 }} />
+          )}
 
           <style>{`
             .mcard-inner { transition: transform 750ms cubic-bezier(.22,1,.36,1); }

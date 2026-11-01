@@ -40,6 +40,15 @@ export type HomeCustomSection = {
   blocks: HomeBlock[]
 }
 
+/** Heading copy for a people showcase (committee / member directory) on home. */
+export type HomeShowcaseHeading = {
+  enabled: boolean
+  eyebrow: string
+  heading: string
+  text: string
+  button_label: string
+}
+
 export type HomeContent = {
   hero: {
     slides: HomeSlide[]
@@ -62,14 +71,31 @@ export type HomeContent = {
     photo_small: string | null
     badge: string
   }
-  facilities: { eyebrow: string; heading: string; text: string }
+  facilities: {
+    enabled: boolean
+    eyebrow: string
+    heading: string
+    text: string
+    button_label: string
+    button_link: string
+  }
+  committee: HomeShowcaseHeading
+  directory: HomeShowcaseHeading
   gallery: {
+    enabled: boolean
     eyebrow: string
     heading: string
     text: string
     button_label: string
     button_link: string
     featured_tag: string
+  }
+  highlights: {
+    enabled: boolean
+    eyebrow: string
+    heading: string
+    text: string
+    items: { value: string; label: string; note: string }[]
   }
   membership: {
     eyebrow: string
@@ -111,14 +137,31 @@ export const EMPTY_HOME: HomeContent = {
     photo_small: null,
     badge: '',
   },
-  facilities: { eyebrow: '', heading: '', text: '' },
+  facilities: {
+    enabled: true,
+    eyebrow: '',
+    heading: '',
+    text: '',
+    button_label: '',
+    button_link: '',
+  },
+  committee: { enabled: true, eyebrow: '', heading: '', text: '', button_label: '' },
+  directory: { enabled: true, eyebrow: '', heading: '', text: '', button_label: '' },
   gallery: {
+    enabled: true,
     eyebrow: '',
     heading: '',
     text: '',
     button_label: '',
     button_link: '',
     featured_tag: '',
+  },
+  highlights: {
+    enabled: true,
+    eyebrow: '',
+    heading: '',
+    text: '',
+    items: [],
   },
   membership: {
     eyebrow: '',
@@ -149,6 +192,16 @@ function asSection(raw: unknown): Record<string, unknown> {
 
 function str(v: unknown): string {
   return v == null ? '' : String(v)
+}
+
+function showcaseHeading(raw: Record<string, unknown>): HomeShowcaseHeading {
+  return {
+    enabled: raw.enabled !== false,
+    eyebrow: str(raw.eyebrow),
+    heading: str(raw.heading),
+    text: str(raw.text),
+    button_label: str(raw.button_label),
+  }
 }
 
 function mergeCustomSections(payload: WebsiteHomeResponse): HomeCustomSection[] {
@@ -202,7 +255,10 @@ function mergeHome(payload: WebsiteHomeResponse): HomeContent {
   const hero = asSection(sections.hero)
   const about = asSection(sections.about)
   const facilities = asSection(sections.facilities)
+  const committee = asSection(sections.committee)
+  const directory = asSection(sections.directory)
   const gallery = asSection(sections.gallery)
+  const highlights = asSection(sections.highlights)
   const membership = asSection(sections.membership)
 
   const slides = Array.isArray(hero.slides)
@@ -248,17 +304,38 @@ function mergeHome(payload: WebsiteHomeResponse): HomeContent {
       badge: str(about.badge),
     },
     facilities: {
+      enabled: facilities.enabled !== false,
       eyebrow: str(facilities.eyebrow),
       heading: str(facilities.heading),
       text: str(facilities.text),
+      button_label: str(facilities.button_label),
+      button_link: str(facilities.button_link),
     },
+    committee: showcaseHeading(committee),
+    directory: showcaseHeading(directory),
     gallery: {
+      enabled: gallery.enabled !== false,
       eyebrow: str(gallery.eyebrow),
       heading: str(gallery.heading),
       text: str(gallery.text),
       button_label: str(gallery.button_label),
       button_link: str(gallery.button_link),
       featured_tag: str(gallery.featured_tag),
+    },
+    highlights: {
+      enabled: highlights.enabled !== false,
+      eyebrow: str(highlights.eyebrow),
+      heading: str(highlights.heading),
+      text: str(highlights.text),
+      items: Array.isArray(highlights.items)
+        ? (highlights.items as { value?: string; label?: string; note?: string }[])
+            .filter((i) => i && typeof i === 'object' && (i.value || i.label))
+            .map((i) => ({
+              value: str(i.value),
+              label: str(i.label),
+              note: str(i.note),
+            }))
+        : [],
     },
     membership: {
       eyebrow: str(membership.eyebrow),

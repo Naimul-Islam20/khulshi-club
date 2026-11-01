@@ -1,22 +1,31 @@
 import { useState, useEffect, useRef } from 'react'
 import type { PageId } from './InnerPage'
 import type { CommitteePageType } from './CommitteePage'
-import logoImg from '@/imports/logo-1.png'
 import { useSiteInfo } from '../lib/siteInfo'
+import ClubLogo from './ClubLogo'
+import { pathForPage, type RoutedPage } from '../lib/routing'
+
+function hrefForPage(page: string) {
+  try {
+    return pathForPage(page as RoutedPage)
+  } catch {
+    return '#'
+  }
+}
 
 type NavLink = { label: string; href: string; dropdown: string[] | null; innerPage?: PageId }
 
 const NAV_LINKS: NavLink[] = [
-  { label: 'Home', href: '#home', dropdown: null },
+  { label: 'Home', href: '/', dropdown: null },
   {
-    label: 'About', href: '#about', dropdown: null,
+    label: 'About', href: '/about/about-club', dropdown: null,
     // dropdown items with their inner page targets are handled via the dropdown panel
   },
-  { label: 'Facilities', href: '#', dropdown: null, innerPage: undefined },
-  { label: 'Membership', href: '#membership', dropdown: null },
-  { label: 'Media', href: '#media', dropdown: null },
-  { label: 'Resources', href: '#', dropdown: null },
-  { label: 'Contact', href: '#contact', dropdown: null },
+  { label: 'Facilities', href: '/facilities', dropdown: null, innerPage: undefined },
+  { label: 'Membership', href: '/membership/benefits', dropdown: null },
+  { label: 'Media', href: '/media', dropdown: null },
+  { label: 'Resources', href: '/resources', dropdown: null },
+  { label: 'Contact', href: '/contact', dropdown: null },
 ]
 
 type AboutItem = { label: string; page: PageId | `committee:${CommitteePageType}` }
@@ -92,7 +101,11 @@ function mobileNavIndex(currentPage?: string) {
 let lastPillPos = 0
 let lastPillVisible = false
 
-export default function Navbar({ onInnerNavigate, currentPage }: { currentPage?: string; onInnerNavigate?: (id: PageId | 'home' | `committee:${CommitteePageType}` | 'facilities' | 'membership-process' | 'member-list' | 'become-member' | 'media' | 'resources' | 'contact' | 'search' | '404' | 'member-login') => void }) {
+export default function Navbar({ onInnerNavigate, currentPage, onOpenSearch }: {
+  currentPage?: string
+  onInnerNavigate?: (id: PageId | 'home' | `committee:${CommitteePageType}` | 'facilities' | 'membership-process' | 'member-list' | 'become-member' | 'media' | 'resources' | 'contact' | 'search' | '404' | 'member-login') => void
+  onOpenSearch?: () => void
+}) {
   const site = useSiteInfo()
   const phone = site.contact.phone
   const email = site.contact.email
@@ -168,17 +181,7 @@ export default function Navbar({ onInnerNavigate, currentPage }: { currentPage?:
         >
           {/* Logo */}
           <a href="#home" onClick={() => onInnerNavigate?.('home')} className="flex items-center shrink-0 mr-6">
-            <img
-              src={site.logo || logoImg}
-              alt={site.club_name}
-              style={{
-                height: scrolled ? 32 : 38,
-                width: 'auto',
-                objectFit: 'contain',
-                transition: 'height 240ms ease-out',
-                flexShrink: 0,
-              }}
-            />
+            <ClubLogo height={scrolled ? 32 : 38} style={{ transition: 'height 240ms ease-out', flexShrink: 0 }} />
           </a>
 
           {/* Desktop nav links */}
@@ -228,31 +231,33 @@ export default function Navbar({ onInnerNavigate, currentPage }: { currentPage?:
                       onMouseLeave={handleMouseLeave}
                     >
                       {dropItems.map((item) => (
-                        <button
+                        <a
                           key={item.page}
-                          onClick={() => { onInnerNavigate?.(item.page); setActiveDropdown(null) }}
+                          href={hrefForPage(item.page)}
+                          onClick={(e) => { e.preventDefault(); onInnerNavigate?.(item.page); setActiveDropdown(null) }}
                           className="w-full text-left block px-4 py-2.5 transition-colors"
-                          style={{ fontSize: 14, fontFamily: 'CKCL', color: '#2A3039', borderRadius: 12, background: 'none', border: 'none', cursor: 'pointer' }}
+                          style={{ fontSize: 14, fontFamily: 'CKCL', color: '#2A3039', borderRadius: 12, textDecoration: 'none' }}
                           onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,241,242,0.8)' }}
                           onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
                         >
                           {item.label}
-                        </button>
+                        </a>
                       ))}
                       {link.label === 'Membership' && (
                         <>
                           <div style={{ height: 1, background: '#E2E6EC', margin: '4px 16px' }}/>
                           {MEMBERSHIP_EXTRA_ITEMS.map((item) => (
-                            <button
+                            <a
                               key={item.page}
-                              onClick={() => { onInnerNavigate?.(item.page as any); setActiveDropdown(null) }}
+                              href={hrefForPage(item.page)}
+                              onClick={(e) => { e.preventDefault(); onInnerNavigate?.(item.page as any); setActiveDropdown(null) }}
                               className="w-full text-left block px-4 py-2.5 transition-colors"
-                              style={{ fontSize: 14, fontFamily: 'CKCL', color: '#2A3039', borderRadius: 12, background: 'none', border: 'none', cursor: 'pointer' }}
+                              style={{ fontSize: 14, fontFamily: 'CKCL', color: '#2A3039', borderRadius: 12, textDecoration: 'none' }}
                               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,241,242,0.8)' }}
                               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
                             >
                               {item.label}
-                            </button>
+                            </a>
                           ))}
                         </>
                       )}
@@ -264,7 +269,38 @@ export default function Navbar({ onInnerNavigate, currentPage }: { currentPage?:
           </div>
 
           {/* CTA buttons */}
-          <div className="hidden lg:flex items-center shrink-0 ml-4">
+          <div className="hidden lg:flex items-center shrink-0 ml-4 gap-2">
+            <button
+              type="button"
+              onClick={() => onOpenSearch?.()}
+              aria-label="Search"
+              title="Search"
+              style={{
+                width: scrolled ? 38 : 42,
+                height: scrolled ? 38 : 42,
+                borderRadius: '50%',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#1C2330',
+                background: 'rgba(14,17,22,0.06)',
+                border: '1.5px solid rgba(14,17,22,0.14)',
+                cursor: 'pointer',
+                transition: 'background 180ms, border-color 180ms',
+              }}
+              onMouseEnter={(e) => {
+                const el = e.currentTarget as HTMLElement
+                el.style.background = 'rgba(14,17,22,0.12)'
+                el.style.borderColor = 'rgba(14,17,22,0.28)'
+              }}
+              onMouseLeave={(e) => {
+                const el = e.currentTarget as HTMLElement
+                el.style.background = 'rgba(14,17,22,0.06)'
+                el.style.borderColor = 'rgba(14,17,22,0.14)'
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </button>
             <button
               onClick={() => onInnerNavigate?.('member-login' as any)}
               style={{
@@ -302,7 +338,16 @@ export default function Navbar({ onInnerNavigate, currentPage }: { currentPage?:
           </div>
 
           {/* Mobile hamburger */}
-          <div className="lg:hidden ml-auto">
+          <div className="lg:hidden ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => onOpenSearch?.()}
+              aria-label="Search"
+              className="p-2"
+              style={{ color: '#0E1116' }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </button>
             <button
               onClick={() => setMobileOpen(true)}
               className="flex flex-col gap-1.5 p-2"

@@ -2,11 +2,24 @@ import { useState, useRef, useCallback, useId, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import ApplicantDashboard, { type ApplicantSection } from './ApplicantDashboard'
 import MembershipFormPdf from './MembershipFormPdf'
-import { MEMBERS } from '../data/members'
 import {
-  DEMO_ACCOUNT, MEMBERSHIP_CATEGORIES, emptyForm, findRecord, getSession, saveRecord, setSession,
+  emptyForm, findRecord, getSession, saveRecord, setSession,
   type Address, type ApplicantAccount, type ApplicantRecord, type ApplicationForm, type Child, type OtherClub,
 } from '../data/application'
+import { ApiError } from '../lib/api/client'
+import { pathForPage } from '../lib/routing'
+import { useSiteInfo } from '../lib/siteInfo'
+import {
+  applicationFeeRows,
+  checkApplicantAvailability,
+  fetchApplicationStatus,
+  fetchPortalClubSettings,
+  searchProposers,
+  submitPortalApplication,
+  type PortalBankAccount,
+  type PortalMembershipType,
+  type PortalProposer,
+} from '../lib/apply'
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const T = {
@@ -419,23 +432,53 @@ function DocUpload({ label, value, onChange }: { label: string; value: string | 
   )
 }
 
-// ─── Member autocomplete ──────────────────────────────────────────────────────
-const MEMBER_SUGGESTIONS = [
-  'Niaz Morshed Elite', 'Hosne Ara-Naz', 'Dr. Rehena Siddiqua', 'Zakir Hossain',
-  'Md. Monirul Islam Yousuf', 'Md. Faridul Alam', 'Mamun-Ur-Rashid Chowdhury',
-  'Taslima Begum', 'Khaled Mahmud', 'Nurul Huda Chowdhury', 'Syed Muraduzzaman',
-]
+// ─── Member autocomplete (API: GET /club-portal/proposers) ─────────────────────
+/** Club names from Website Maintenance → Site Info (short for inline copy, full for legal text). */
+function useClubNames() {
+  const site = useSiteInfo()
+  return {
+    short: site.short_name || site.club_name || '',
+    full: site.club_name || site.short_name || '',
+  }
+}
 
-function MemberSearch({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function MemberSearch({ label, value, memberId, onSelect }: {
+  label: string
+  value: string
+  memberId: string
+  onSelect: (name: string, memberNo: string) => void
+}) {
+  const club = useClubNames()
   const [focused, setFocused] = useState(false)
   const [query, setQuery] = useState(value)
-  const suggestions = query.length > 1 ? MEMBER_SUGGESTIONS.filter((m) => m.toLowerCase().includes(query.toLowerCase()) && m !== value) : []
+  const [suggestions, setSuggestions] = useState<PortalProposer[]>([])
+  const [loading, setLoading] = useState(false)
   const state: FieldState = value ? 'success' : focused ? 'focused' : 'idle'
 
   const borderColor = state === 'success' ? T.green : state === 'focused' ? T.brand : T.ink100
   const ringColor = state === 'success' ? 'rgba(22,163,74,0.12)' : state === 'focused' ? T.brandRing : 'transparent'
   const id = useId()
   const isUp = state !== 'idle' || query !== ''
+
+  useEffect(() => {
+    if (value) setQuery(value)
+  }, [value])
+
+  useEffect(() => {
+    if (value || query.trim().length < 2) {
+      setSuggestions([])
+      return
+    }
+    let alive = true
+    const t = window.setTimeout(() => {
+      setLoading(true)
+      searchProposers(query)
+        .then((rows) => { if (alive) setSuggestions(Array.isArray(rows) ? rows : []) })
+        .catch(() => { if (alive) setSuggestions([]) })
+        .finally(() => { if (alive) setLoading(false) })
+    }, 280)
+    return () => { alive = false; window.clearTimeout(t) }
+  }, [query, value])
 
   return (
     <div style={{ position: 'relative', marginBottom: 4 }}>
@@ -444,46 +487,53 @@ function MemberSearch({ label, value, onChange }: { label: string; value: string
         <input
           id={id}
           value={value || query}
-          onChange={(e) => { setQuery(e.target.value); onChange('') }}
+          onChange={(e) => { setQuery(e.target.value); onSelect('', '') }}
           onFocus={() => setFocused(true)}
           onBlur={() => setTimeout(() => setFocused(false), 160)}
           style={{ ...inputStyle(), paddingRight: value ? 44 : 14 }}
-          placeholder={focused && !value ? 'Type member name…' : undefined}
+          placeholder={focused && !value ? 'Type member name or ID…' : undefined}
           autoComplete="off"
         />
         {value && (
           <div style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: 4 }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-            <button onClick={() => { onChange(''); setQuery('') }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.ink200, display: 'flex', padding: 2 }}>
+            <button type="button" onClick={() => { onSelect('', ''); setQuery('') }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.ink200, display: 'flex', padding: 2 }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
         )}
       </div>
 
-      {/* Dropdown */}
-      {focused && suggestions.length > 0 && !value && (
+      {focused && !value && (loading || suggestions.length > 0) && (
         <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, background: '#FFFFFF', border: `1px solid ${T.ink100}`, borderRadius: 12, boxShadow: '0 8px 24px rgba(14,17,22,0.12)', zIndex: 50, overflow: 'hidden' }}>
-          {suggestions.slice(0, 6).map((s) => (
+          {loading && suggestions.length === 0 && (
+            <div style={{ padding: '12px 16px', fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>Searching members…</div>
+          )}
+          {suggestions.slice(0, 8).map((s) => (
             <div
-              key={s}
-              onMouseDown={() => { onChange(s); setQuery(s); setFocused(false) }}
+              key={s.id}
+              onMouseDown={() => { onSelect(s.name, s.member_no || ''); setQuery(s.name); setFocused(false) }}
               style={{ padding: '12px 16px', fontFamily: 'CKCL', fontSize: 14, color: T.ink600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = T.redDim }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
             >
               <div style={{ width: 28, height: 28, borderRadius: '50%', background: T.surface100, border: `1.5px solid ${T.brass}40`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <span style={{ fontFamily: 'CKCL', fontSize: 10, fontWeight: 600, color: T.brass }}>{s[0]}</span>
+                <span style={{ fontFamily: 'CKCL', fontSize: 10, fontWeight: 600, color: T.brass }}>{(s.name || '?')[0]}</span>
               </div>
               <div>
-                <div style={{ fontWeight: 600, color: T.ink900 }}>{s}</div>
-                <div style={{ fontSize: 11, color: T.ink200, marginTop: 1 }}>CKCL Member</div>
+                <div style={{ fontWeight: 600, color: T.ink900 }}>{s.name}</div>
+                <div style={{ fontSize: 11, color: T.ink200, marginTop: 1 }}>{s.member_no || 'Member'}</div>
               </div>
             </div>
           ))}
         </div>
       )}
-      {value && <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 5, fontSize: 12, fontFamily: 'CKCL', color: T.green, paddingLeft: 2 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Verified CKCL member</div>}
+      {value && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 5, fontSize: 12, fontFamily: 'CKCL', color: T.green, paddingLeft: 2 }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          {memberId ? `Verified · ${memberId}` : `Selected ${club.short ? `${club.short} ` : ''}member`}
+        </div>
+      )}
     </div>
   )
 }
@@ -837,14 +887,38 @@ function Step4({ form, update }: StepProps) {
   )
 }
 
+/**
+ * Opens the club's Terms & Conditions page (Website Maintenance → About → Terms) in a new
+ * tab, so the half-filled form stays put. stopPropagation keeps the click from also
+ * toggling the surrounding checkbox label.
+ */
+function TermsLink() {
+  return (
+    <a
+      href={pathForPage('terms')}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      style={{ color: T.brand, textDecoration: 'none', fontWeight: 600 }}
+    >
+      Terms & Conditions
+    </a>
+  )
+}
+
 // ─── Step 5: Category, proposer & declaration ─────────────────────────────────
-function FeePanel({ category }: { category: string }) {
-  const rows = [
-    { label: 'Admission Fee (one-time)', amount: '৳ 50,000' },
-    { label: 'Annual Subscription (Year 1)', amount: '৳ 12,000' },
-    { label: 'Processing Fee', amount: '৳ 1,500' },
-  ]
-  const total = '৳ 63,500'
+function formatBdt(n: number) {
+  return `৳ ${n.toLocaleString('en-BD', { maximumFractionDigits: 0 })}`
+}
+
+function FeePanel({ category, fees, banks, registrationFee }: {
+  category: string
+  fees?: PortalMembershipType['fees']
+  banks?: PortalBankAccount[]
+  registrationFee?: number
+}) {
+  const { rows, total } = applicationFeeRows(registrationFee, fees)
+  const hasCategoryFees = rows.some((r) => r.when === 'approval')
 
   return (
     <div style={{ background: '#FFFFFF', border: `1px solid rgba(185,139,67,0.28)`, borderRadius: 16, overflow: 'hidden' }}>
@@ -852,49 +926,109 @@ function FeePanel({ category }: { category: string }) {
         <div style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 10, letterSpacing: '0.08em', color: T.brass }}>FEE SUMMARY</div>
         <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, marginTop: 3 }}>{category || 'Membership'} · due on approval</div>
       </div>
-      {rows.map((r, i) => (
-        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '12px 20px', borderBottom: `1px solid ${T.surface50}` }}>
-          <span style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>{r.label}</span>
-          <span style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 13, color: T.ink600, whiteSpace: 'nowrap' }}>{r.amount}</span>
+      {!hasCategoryFees && (
+        <div style={{ padding: '14px 20px', fontFamily: 'CKCL', fontSize: 13, color: T.ink400, borderBottom: rows.length ? `1px solid ${T.surface50}` : 'none' }}>
+          {category ? 'No fee schedule published for this category yet.' : 'Select a membership category to see fees.'}
         </div>
-      ))}
-      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 20px', background: T.redDim }}>
-        <span style={{ fontFamily: 'CKCL', fontSize: 14, fontWeight: 700, color: T.ink900 }}>Total Due</span>
-        <span style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 15, color: T.brand }}>{total}</span>
-      </div>
+      )}
+      {rows.length > 0 && (
+        <>
+          {rows.map((r, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '12px 20px', borderBottom: `1px solid ${T.surface50}` }}>
+              <span style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>
+                {r.label}
+                {r.when === 'application' && <span style={{ color: T.ink200 }}> · with application</span>}
+              </span>
+              <span style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 13, color: T.ink600, whiteSpace: 'nowrap' }}>{formatBdt(r.amount)}</span>
+            </div>
+          ))}
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 20px', background: T.redDim }}>
+            <span style={{ fontFamily: 'CKCL', fontSize: 14, fontWeight: 700, color: T.ink900 }}>Total Due</span>
+            <span style={{ fontFamily: 'CKCL', fontWeight: 500, fontSize: 15, color: T.brand }}>{formatBdt(total)}</span>
+          </div>
+        </>
+      )}
+      {(banks || []).length > 0 && (
+        <div style={{ padding: '12px 20px', borderTop: `1px solid ${T.ink100}` }}>
+          <div style={{ fontFamily: 'CKCL', fontSize: 11, fontWeight: 600, color: T.ink400, letterSpacing: '0.04em', marginBottom: 8 }}>CLUB BANK ACCOUNTS</div>
+          {(banks || []).map((b) => (
+            <div key={b.id} style={{ marginBottom: 8, fontFamily: 'CKCL', fontSize: 12.5, color: T.ink600, lineHeight: 1.45 }}>
+              <div style={{ fontWeight: 600, color: T.ink900 }}>{b.bank_name}{b.branch_name ? ` · ${b.branch_name}` : ''}</div>
+              <div>{b.account_name}</div>
+              <div>A/C {b.account_no}{b.routing_no ? ` · Routing ${b.routing_no}` : ''}</div>
+              {b.notes && <div style={{ color: T.ink200 }}>{b.notes}</div>}
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ padding: '12px 20px', background: T.surface50 }}>
         <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, lineHeight: 1.5 }}>
-          Payable by bank transfer, bKash or Nagad. Payment details are sent with the approval letter. Admission Fee is refunded in full if the application is declined.
+          Payable by bank transfer after approval. Put your application number in the transfer narration. Admission Fee is refunded if declined.
         </div>
       </div>
     </div>
   )
 }
 
-const memberIdFor = (name: string) => {
-  const m = MEMBERS.find((x) => x.name === name)
-  return m ? `CKCL-${String(m.id).padStart(4, '0')}` : ''
-}
+function Step5({ form, update, errors }: StepProps & { errors: Partial<Record<'category' | 'agreed' | 'submit', string>> }) {
+  const club = useClubNames()
+  const [types, setTypes] = useState<PortalMembershipType[]>([])
+  const [banks, setBanks] = useState<PortalBankAccount[]>([])
+  const [registrationFee, setRegistrationFee] = useState(0)
+  const [typesLoading, setTypesLoading] = useState(true)
+  const [typesError, setTypesError] = useState<string | null>(null)
+  const [closed, setClosed] = useState(false)
 
-function Step5({ form, update, errors }: StepProps & { errors: Partial<Record<'category' | 'agreed', string>> }) {
+  useEffect(() => {
+    let alive = true
+    setTypesLoading(true)
+    fetchPortalClubSettings()
+      .then((s) => {
+        if (!alive) return
+        setClosed(s.allow_online_application === false)
+        setTypes(Array.isArray(s.membership_types) ? s.membership_types : [])
+        setBanks(Array.isArray(s.bank_accounts) ? s.bank_accounts : [])
+        setRegistrationFee(Number(s.registration_fee) || 0)
+        setTypesError(null)
+      })
+      .catch((e: Error) => {
+        if (!alive) return
+        setTypesError(e.message || 'Could not load membership categories.')
+      })
+      .finally(() => { if (alive) setTypesLoading(false) })
+    return () => { alive = false }
+  }, [])
+
   return (
     <Stack gap={20}>
-      <SectionHead title="Category & Declaration" subtitle="Choose your membership category and name the CKCL member proposing you." />
+      <SectionHead title="Category & Declaration" subtitle={`Choose your membership category and name the ${club.short ? `${club.short} ` : ''}member proposing you.`} />
+
+      {closed && (
+        <div style={{ padding: '12px 14px', borderRadius: 10, background: T.brandDim, border: `1px solid rgba(225,11,23,0.25)`, fontFamily: 'CKCL', fontSize: 13, color: T.red }}>
+          Online applications are currently closed. Please contact the club office.
+        </div>
+      )}
 
       <div>
         <div style={{ fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: errors.category ? T.red : T.ink400, letterSpacing: '0.04em', marginBottom: 12 }}>CATEGORY OF MEMBERSHIP *</div>
+        {typesLoading && <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>Loading categories…</div>}
+        {typesError && <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.red }}>{typesError}</div>}
+        {!typesLoading && !typesError && types.length === 0 && (
+          <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400 }}>No membership types are open for application yet.</div>
+        )}
         <div role="radiogroup" aria-label="Category of membership" className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          {MEMBERSHIP_CATEGORIES.map((c) => {
-            const on = form.category === c
+          {types.map((t) => {
+            const on = form.membership_type_id === t.id
             return (
               <button
-                key={c} role="radio" aria-checked={on} onClick={() => update({ category: c })}
+                key={t.id} type="button" role="radio" aria-checked={on}
+                onClick={() => update({ membership_type_id: t.id, category: t.name })}
                 style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', textAlign: 'left', borderRadius: 12, cursor: 'pointer', background: on ? T.redDim : '#FFFFFF', border: `1.5px solid ${on ? T.brand : errors.category ? 'rgba(225,11,23,0.4)' : T.ink100}`, boxShadow: on ? `0 0 0 3px ${T.brandRing}` : 'none', transition: 'all 160ms' }}
               >
                 <span style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, border: `2px solid ${on ? T.brand : T.ink100}`, background: on ? T.brand : '#FFFFFF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {on && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#FFFFFF' }}/>}
                 </span>
-                <span style={{ fontFamily: 'CKCL', fontSize: 13.5, fontWeight: on ? 600 : 500, color: T.ink900 }}>{c}</span>
+                <span style={{ fontFamily: 'CKCL', fontSize: 13.5, fontWeight: on ? 600 : 500, color: T.ink900 }}>{t.name}</span>
               </button>
             )
           })}
@@ -903,12 +1037,16 @@ function Step5({ form, update, errors }: StepProps & { errors: Partial<Record<'c
       </div>
 
       <div>
-        <SubHead>PROPOSED BY (ANY MEMBER OF CKCL)</SubHead>
+        <SubHead>{club.short ? `PROPOSED BY (ANY MEMBER OF ${club.short.toUpperCase()})` : 'PROPOSED BY (ANY CLUB MEMBER)'}</SubHead>
         <div style={{ height: 14 }}/>
         <Stack>
-          <MemberSearch label="Proposing Member" value={form.proposer.name}
-            onChange={(v) => update({ proposer: { name: v, memberId: v ? memberIdFor(v) || form.proposer.memberId : '' } })} />
-          <TextInput label="Proposer's Membership ID" value={form.proposer.memberId} onChange={(v) => update({ proposer: { ...form.proposer, memberId: v } })} placeholder="e.g. CKCL-0007" />
+          <MemberSearch
+            label="Proposing Member"
+            value={form.proposer.name}
+            memberId={form.proposer.memberId}
+            onSelect={(name, memberNo) => update({ proposer: { name, memberId: memberNo } })}
+          />
+          <TextInput label="Proposer's Membership ID" value={form.proposer.memberId} onChange={(v) => update({ proposer: { ...form.proposer, memberId: v } })} placeholder="Proposer's membership ID" />
         </Stack>
       </div>
 
@@ -921,11 +1059,16 @@ function Step5({ form, update, errors }: StepProps & { errors: Partial<Record<'c
         </Stack>
       </div>
 
-      <FeePanel category={form.category} />
+      <FeePanel
+        category={form.category}
+        fees={types.find((t) => t.id === form.membership_type_id)?.fees}
+        banks={banks}
+        registrationFee={registrationFee}
+      />
 
       <Checkbox checked={form.agreed} onChange={(v) => update({ agreed: v })} error={errors.agreed}>
         I, <strong>{form.personal.fullName || 'the applicant'}</strong>, declare that I have neither committed any illegal or criminal act under the laws of Bangladesh, nor been punished by a Bangladesh court for any offence, and that the particulars above are correct. I agree to the{' '}
-        <a href="#" style={{ color: T.brand, textDecoration: 'none', fontWeight: 600 }}>Terms & Conditions</a> and the constitution of Chittagong Khulshi Club Limited.
+        <TermsLink /> and the constitution of {club.full || 'the club'}.
       </Checkbox>
     </Stack>
   )
@@ -979,7 +1122,7 @@ function MembershipFormSection({ record, onChange, onPreview, onSubmitted }: {
   onSubmitted: () => void
 }) {
   const [submitting, setSubmitting] = useState(false)
-  const [errors, setErrors] = useState<Partial<Record<'category' | 'agreed', string>>>({})
+  const [errors, setErrors] = useState<Partial<Record<'category' | 'agreed' | 'submit', string>>>({})
   const topRef = useRef<HTMLDivElement>(null)
   const { form, step } = record
 
@@ -991,38 +1134,46 @@ function MembershipFormSection({ record, onChange, onPreview, onSubmitted }: {
 
   if (record.status === 'submitted') {
     return (
-      <div style={{ background: '#FFFFFF', border: `1px solid ${T.ink100}`, borderRadius: 20, padding: 'clamp(28px,4vw,48px)', textAlign: 'center', maxWidth: 560, margin: '0 auto 48px' }}>
-        <div style={{ width: 64, height: 64, borderRadius: '50%', background: T.greenDim, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={T.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-        </div>
-        <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 24, color: T.ink900, marginBottom: 6 }}>Application submitted.</div>
-        <p style={{ fontFamily: 'CKCL', fontSize: 14.5, color: T.ink400, lineHeight: 1.65, margin: '0 0 20px' }}>
-          Your membership form is with the Executive Committee and can no longer be edited. Print the preview, sign it, and bring it to the club office with four passport-sized photos.
-        </p>
-        <div style={{ background: T.surface50, border: `1px solid ${T.ink100}`, borderRadius: 12, padding: '14px 18px', marginBottom: 22 }}>
-          <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, letterSpacing: '0.04em', marginBottom: 4 }}>APPLICATION REFERENCE</div>
-          <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 20, color: T.brand, letterSpacing: '0.1em' }}>{record.reference}</div>
-        </div>
-        <button onClick={onPreview} style={{ height: 46, padding: '0 26px', borderRadius: 999, border: 'none', background: T.brand, fontFamily: 'CKCL', fontSize: 14, fontWeight: 700, color: '#FFFFFF', cursor: 'pointer' }}>
-          Preview membership form
-        </button>
-      </div>
+      <SubmittedApplication
+        record={record}
+        onPreview={onPreview}
+      />
     )
   }
 
-  const next = () => {
+  const next = async () => {
     if (step < LAST_STEP) { goTo(step + 1); return }
     const errs: typeof errors = {}
-    if (!form.category) errs.category = 'Choose a membership category'
+    if (!form.membership_type_id) errs.category = 'Choose a membership category'
     if (!form.agreed) errs.agreed = 'You must accept the declaration to submit'
+    if (!record.account.password || record.account.password.length < 8) {
+      errs.submit = 'Your applicant password is missing. Log out and register/sign in again, then submit.'
+    }
     setErrors(errs)
-    if (Object.keys(errs).length) return
+    if (Object.keys(errs).length) {
+      topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
     setSubmitting(true)
-    window.setTimeout(() => {
-      setSubmitting(false)
-      onChange({ ...record, status: 'submitted', submittedAt: new Date().toISOString(), reference: `CKCL-APP-${Math.random().toString(36).slice(2, 8).toUpperCase()}` })
+    setErrors({})
+    try {
+      const result = await submitPortalApplication(record.account, form)
+      onChange({
+        ...record,
+        status: 'submitted',
+        submittedAt: new Date().toISOString(),
+        reference: result.application_no,
+      })
       onSubmitted()
-    }, 1400)
+    } catch (e) {
+      const msg = e instanceof ApiError
+        ? (Object.values(e.errors || {}).flat()[0] || e.message)
+        : (e instanceof Error ? e.message : 'Could not submit application.')
+      setErrors({ submit: msg })
+      topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const stepProps = { form, update }
@@ -1030,13 +1181,69 @@ function MembershipFormSection({ record, onChange, onPreview, onSubmitted }: {
     <div ref={topRef} style={{ scrollMarginTop: 96 }}>
       <StepProgress step={step} onStep={goTo}/>
       <div style={{ maxWidth: 760, paddingTop: 'clamp(24px,3vw,36px)' }}>
+        {errors.submit && (
+          <div style={{ marginBottom: 16, padding: '12px 14px', borderRadius: 10, background: T.brandDim, border: `1px solid rgba(225,11,23,0.25)`, fontFamily: 'CKCL', fontSize: 13, color: T.red }}>
+            {errors.submit}
+          </div>
+        )}
         {step === 0 && <Step1 {...stepProps}/>}
         {step === 1 && <Step2 {...stepProps}/>}
         {step === 2 && <Step3 {...stepProps}/>}
         {step === 3 && <Step4 {...stepProps}/>}
         {step === 4 && <Step5 {...stepProps} errors={errors}/>}
       </div>
-      <FooterBar step={step} onBack={() => goTo(Math.max(0, step - 1))} onNext={next} onPreview={onPreview} submitting={submitting}/>
+      <FooterBar step={step} onBack={() => goTo(Math.max(0, step - 1))} onNext={() => { void next() }} onPreview={onPreview} submitting={submitting}/>
+    </div>
+  )
+}
+
+function SubmittedApplication({ record, onPreview }: { record: ApplicantRecord; onPreview: () => void }) {
+  const [liveStatus, setLiveStatus] = useState<string | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  const refresh = async () => {
+    if (!record.reference) return
+    setChecking(true)
+    setStatusError(null)
+    try {
+      const phone = record.form.personal.phone || record.account.mobile
+      const res = await fetchApplicationStatus(record.reference, phone)
+      setLiveStatus(res.status)
+    } catch (e) {
+      setStatusError(e instanceof Error ? e.message : 'Could not refresh status.')
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  useEffect(() => { void refresh() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{ background: '#FFFFFF', border: `1px solid ${T.ink100}`, borderRadius: 20, padding: 'clamp(28px,4vw,48px)', textAlign: 'center', maxWidth: 560, margin: '0 auto 48px' }}>
+      <div style={{ width: 64, height: 64, borderRadius: '50%', background: T.greenDim, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={T.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 24, color: T.ink900, marginBottom: 6 }}>Application submitted.</div>
+      <p style={{ fontFamily: 'CKCL', fontSize: 14.5, color: T.ink400, lineHeight: 1.65, margin: '0 0 20px' }}>
+        Your membership form is with the Executive Committee and can no longer be edited. Print the preview, sign it, and bring it to the club office with four passport-sized photos.
+      </p>
+      <div style={{ background: T.surface50, border: `1px solid ${T.ink100}`, borderRadius: 12, padding: '14px 18px', marginBottom: 12 }}>
+        <div style={{ fontFamily: 'CKCL', fontSize: 11, color: T.ink200, letterSpacing: '0.04em', marginBottom: 4 }}>APPLICATION REFERENCE</div>
+        <div style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 20, color: T.brand, letterSpacing: '0.1em' }}>{record.reference}</div>
+        <div style={{ fontFamily: 'CKCL', fontSize: 13, color: T.ink400, marginTop: 10 }}>
+          Status: <strong style={{ color: T.ink900 }}>{liveStatus || 'pending'}</strong>
+        </div>
+        {statusError && <div style={{ fontFamily: 'CKCL', fontSize: 12, color: T.red, marginTop: 6 }}>{statusError}</div>}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
+        <button type="button" onClick={() => { void refresh() }} disabled={checking} style={{ height: 46, padding: '0 22px', borderRadius: 999, border: `1px solid ${T.ink100}`, background: '#FFFFFF', fontFamily: 'CKCL', fontSize: 14, fontWeight: 600, color: T.ink600, cursor: 'pointer' }}>
+          {checking ? 'Checking…' : 'Refresh status'}
+        </button>
+        <button type="button" onClick={onPreview} style={{ height: 46, padding: '0 26px', borderRadius: 999, border: 'none', background: T.brand, fontFamily: 'CKCL', fontSize: 14, fontWeight: 700, color: '#FFFFFF', cursor: 'pointer' }}>
+          Preview membership form
+        </button>
+      </div>
     </div>
   )
 }
@@ -1050,6 +1257,7 @@ function RegisterCard({ onRegistered, onLogin }: { onRegistered: (r: ApplicantRe
   const [agreed, setAgreed] = useState(false)
   const [tried, setTried] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [apiError, setApiError] = useState('')
   const set = (patch: Partial<ApplicantAccount>) => setAcc((a) => ({ ...a, ...patch }))
 
   const taken = EMAIL_RE.test(acc.email) && !!findRecord(acc.email)
@@ -1064,15 +1272,27 @@ function RegisterCard({ onRegistered, onLogin }: { onRegistered: (r: ApplicantRe
   }
   const show = (k: keyof typeof errs) => (tried || (k === 'email' && taken) ? errs[k] || undefined : undefined)
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setTried(true)
+    setApiError('')
     if (Object.values(errs).some(Boolean)) return
     setBusy(true)
-    window.setTimeout(() => {
-      const account = { ...acc, email: acc.email.trim(), mobile: acc.mobile.replace(/[\s-]/g, '') }
+    try {
+      const mobile = acc.mobile.replace(/[\s-]/g, '')
+      const email = acc.email.trim().toLowerCase()
+      const avail = await checkApplicantAvailability({ email, phone: mobile })
+      if (!avail.available) {
+        setApiError(`An application is already under review${avail.application_no ? ` (${avail.application_no})` : ''}. Contact the club office.`)
+        return
+      }
+      const account = { ...acc, email, mobile }
       onRegistered({ account, form: emptyForm(account), step: 0, status: 'draft' })
-    }, 900)
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : 'Could not verify availability. Try again.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -1098,10 +1318,16 @@ function RegisterCard({ onRegistered, onLogin }: { onRegistered: (r: ApplicantRe
           </Row>
           <div style={{ marginTop: 4 }}>
             <Checkbox checked={agreed} onChange={setAgreed} error={show('agreed')}>
-              I agree to the <a href="#" style={{ color: T.brand, textDecoration: 'none', fontWeight: 600 }}>Terms & Conditions</a>
+              I agree to the <TermsLink />
             </Checkbox>
           </div>
         </Stack>
+
+        {apiError && (
+          <div role="alert" style={{ marginTop: 16, padding: '12px 14px', borderRadius: 10, background: T.brandDim, border: `1px solid rgba(225,11,23,0.25)`, fontFamily: 'CKCL', fontSize: 13, color: T.red }}>
+            {apiError}
+          </div>
+        )}
 
         <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-4" style={{ marginTop: 26 }}>
           <div style={{ fontFamily: 'CKCL', fontSize: 14, color: T.ink400 }}>
@@ -1109,7 +1335,7 @@ function RegisterCard({ onRegistered, onLogin }: { onRegistered: (r: ApplicantRe
             <button type="button" onClick={onLogin} style={{ fontFamily: 'CKCL', fontSize: 14, fontWeight: 700, color: T.brand, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>Log in</button>
           </div>
           <button type="submit" disabled={busy} style={{ height: 48, padding: '0 30px', borderRadius: 999, border: 'none', background: busy ? '#B70813' : T.brand, fontFamily: 'CKCL', fontSize: 15, fontWeight: 700, color: '#FFFFFF', cursor: busy ? 'default' : 'pointer' }}>
-            {busy ? 'Creating account…' : 'Submit'}
+            {busy ? 'Checking…' : 'Submit'}
           </button>
         </div>
       </div>
@@ -1164,9 +1390,6 @@ function LoginModal({ onClose, onLoggedIn }: { onClose: () => void; onLoggedIn: 
         <button type="submit" disabled={busy} style={{ width: '100%', height: 48, marginTop: 20, borderRadius: 999, border: 'none', background: busy ? '#B70813' : T.brand, fontFamily: 'CKCL', fontSize: 15, fontWeight: 700, color: '#FFFFFF', cursor: busy ? 'default' : 'pointer' }}>
           {busy ? 'Logging in…' : 'Log in'}
         </button>
-        <div style={{ fontFamily: 'CKCL', fontSize: 11.5, color: T.ink200, textAlign: 'center', marginTop: 14 }}>
-          Demo account: {DEMO_ACCOUNT.email} · {DEMO_ACCOUNT.password}
-        </div>
       </form>
     </div>,
     document.body,
@@ -1181,13 +1404,14 @@ const HOW_IT_WORKS = [
 ]
 
 function RegisterSection({ onAuthed }: { onAuthed: (r: ApplicantRecord) => void }) {
+  const club = useClubNames()
   const [loginOpen, setLoginOpen] = useState(false)
   return (
     <div style={{ maxWidth: 1280, margin: '0 auto', padding: 'clamp(32px,5vw,64px) clamp(24px,5vw,80px)' }}>
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-10 lg:gap-14 items-start">
         <div>
           <div className="eyebrow" style={{ fontSize: 11, color: T.brass, marginBottom: 10 }}>HOW IT WORKS</div>
-          <h2 style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 'clamp(22px,2.4vw,30px)', color: T.ink900, margin: '0 0 24px', letterSpacing: '-0.01em', lineHeight: 1.2 }}>Four steps to joining Khulshi Club.</h2>
+          <h2 style={{ fontFamily: 'CKCL', fontWeight: 600, fontSize: 'clamp(22px,2.4vw,30px)', color: T.ink900, margin: '0 0 24px', letterSpacing: '-0.01em', lineHeight: 1.2 }}>Four steps to joining {club.short || 'the club'}.</h2>
           <ol style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 18 }}>
             {HOW_IT_WORKS.map((s, i) => (
               <li key={s.title} style={{ display: 'flex', gap: 14 }}>

@@ -1,14 +1,15 @@
 import { useState } from 'react'
-import logoImg from '@/imports/logo-1.png'
+import { ApiError } from '../lib/api/client'
+import { portalForgotPassword, portalLogin } from '../lib/portal'
+import { useHome } from '../lib/home'
 import { useSiteInfo } from '../lib/siteInfo'
+import ClubLogo from './ClubLogo'
 
 const T = {
   ink900: '#0E1116', ink700: '#1C2330', ink600: '#2A3039', ink400: '#5C6673', ink200: '#A8B0BB', ink100: '#E2E6EC',
   surface0: '#FFFFFF', surface50: '#F7F8FA', surface100: '#EEF1F5',
   brand: '#E10B17', brand700: '#B70813', brandDim: '#FFF1F2', brass: '#B98B43',
 }
-
-const PHOTO = 'https://images.unsplash.com/photo-1778517320799-479bb45cdb94?w=1920&h=1080&fit=crop&auto=format'
 
 function EyeIcon({ open }: { open: boolean }) {
   return open
@@ -17,51 +18,70 @@ function EyeIcon({ open }: { open: boolean }) {
 }
 
 export default function MemberLoginPage({ onLogin, onNavigate }: {
-  onLogin: (memberNo: string) => void
+  onLogin: () => void
   onNavigate: (page: string) => void
 }) {
   const site = useSiteInfo()
+  // Background: first home hero slide, else the site's share image (both set in Website Maintenance).
+  const { home } = useHome()
+  const photo = home.hero.slides[0]?.image || site.og_image || null
   const [memberId, setMemberId] = useState('')
   const [password, setPassword] = useState('')
   const [showPass, setShowPass] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [authError, setAuthError] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<{ memberId?: string; password?: string }>({})
   const [focusedId, setFocusedId] = useState(false)
   const [focusedPw, setFocusedPw] = useState(false)
   const [forgotSent, setForgotSent] = useState(false)
+  const [forgotBusy, setForgotBusy] = useState(false)
 
   const validate = () => {
     const e: typeof fieldErrors = {}
-    if (!memberId.trim()) e.memberId = 'Member ID is required'
-    else if (!/^[A-Z]{2}\d{4}$/i.test(memberId.trim())) e.memberId = 'Format: FM0001'
+    if (!memberId.trim()) e.memberId = 'Member no, phone or email is required'
     if (!password) e.password = 'Password is required'
     else if (password.length < 6) e.password = 'Minimum 6 characters'
     return e
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const errs = validate()
-    if (Object.keys(errs).length) { setFieldErrors(errs); setAuthError(false); return }
+    if (Object.keys(errs).length) { setFieldErrors(errs); setAuthError(null); return }
     setFieldErrors({})
-    setAuthError(false)
+    setAuthError(null)
     setLoading(true)
-    setTimeout(() => {
+    try {
+      await portalLogin(memberId.trim(), password)
+      onLogin()
+    } catch (err) {
+      const msg = err instanceof ApiError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : 'Could not sign in. Please try again.'
+      setAuthError(msg)
+    } finally {
       setLoading(false)
-      // Simulate wrong password for any password that isn't "password123"
-      if (password !== 'password123') {
-        setAuthError(true)
-        return
-      }
-      onLogin(memberId.toUpperCase().trim())
-    }, 1400)
+    }
   }
 
-  const handleForgot = (e: React.MouseEvent) => {
+  const handleForgot = async (e: React.MouseEvent) => {
     e.preventDefault()
-    setForgotSent(true)
-    setTimeout(() => setForgotSent(false), 4000)
+    if (!memberId.trim()) {
+      setFieldErrors({ memberId: 'Enter your member no, phone or email first' })
+      return
+    }
+    setForgotBusy(true)
+    try {
+      await portalForgotPassword(memberId.trim())
+      setForgotSent(true)
+      setTimeout(() => setForgotSent(false), 5000)
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Could not send reset code.')
+    } finally {
+      setForgotBusy(false)
+    }
   }
 
   const fieldBorder = (error: boolean, focused: boolean) =>
@@ -112,7 +132,9 @@ export default function MemberLoginPage({ onLogin, onNavigate }: {
       `}</style>
 
       {/* Full-bleed photograph + readability scrims */}
-      <div style={{ position: 'absolute', inset: 0, backgroundImage: `url(${PHOTO})`, backgroundSize: 'cover', backgroundPosition: 'center' }}/>
+      {photo
+        ? <div style={{ position: 'absolute', inset: 0, backgroundImage: `url(${photo})`, backgroundSize: 'cover', backgroundPosition: 'center' }}/>
+        : <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(160deg, #2A3039 0%, #0E1116 100%)' }}/>}
       <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, rgba(14,17,22,0.55) 0%, rgba(14,17,22,0.25) 35%, rgba(14,17,22,0.35) 65%, rgba(14,17,22,0.85) 100%)' }}/>
 
       {/* Top bar */}
@@ -143,10 +165,10 @@ export default function MemberLoginPage({ onLogin, onNavigate }: {
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 36 }}>
             <button
               onClick={() => onNavigate('home')}
-              aria-label="Chittagong Khulshi Club home"
+              aria-label={`${site.club_name || 'Club'} home`}
               style={{ background: 'none', padding: 0, border: 'none', cursor: 'pointer', display: 'flex' }}
             >
-              <img src={logoImg} alt="Chittagong Khulshi Club Ltd." style={{ height: 'clamp(30px,5vw,40px)', width: 'auto', objectFit: 'contain', display: 'block' }}/>
+              <ClubLogo height="clamp(30px,5vw,40px)" color="#FFFFFF" />
             </button>
             <div className="eyebrow" style={{ marginTop: 16, fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.90)', letterSpacing: '0.18em', textShadow: '0 1px 8px rgba(0,0,0,0.5)' }}>Member Portal</div>
           </div>
@@ -156,8 +178,13 @@ export default function MemberLoginPage({ onLogin, onNavigate }: {
             <div role="alert" style={{ animation: 'fadeIn 200ms ease', marginBottom: 14, padding: '12px 16px', borderRadius: 10, background: 'rgba(225,11,23,0.22)', border: '1px solid rgba(255,90,99,0.55)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
               <svg style={{ flexShrink: 0, marginTop: 2 }} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FFB3B8" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
               <div style={{ fontFamily: 'CKCL', fontSize: 13, color: '#FFFFFF', lineHeight: 1.6 }}>
-                {"That member ID or password isn't right. Try again, or call the club office on "}
-                <a href={site.contact.phone_href ?? undefined} style={{ fontWeight: 700, color: '#FFFFFF' }}>{site.contact.phone}</a>.
+                {authError}{' '}
+                {site.contact.phone ? (
+                  <>
+                    Call the club office on{' '}
+                    <a href={site.contact.phone_href ?? undefined} style={{ fontWeight: 700, color: '#FFFFFF' }}>{site.contact.phone}</a>.
+                  </>
+                ) : null}
               </div>
             </div>
           )}
@@ -166,7 +193,9 @@ export default function MemberLoginPage({ onLogin, onNavigate }: {
           {forgotSent && (
             <div role="status" style={{ animation: 'fadeIn 200ms ease', marginBottom: 14, padding: '12px 16px', borderRadius: 10, background: 'rgba(22,163,74,0.22)', border: '1px solid rgba(74,222,128,0.50)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)', display: 'flex', alignItems: 'center', gap: 8 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#86EFAC" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-              <span style={{ fontFamily: 'CKCL', fontSize: 13, color: '#FFFFFF' }}>Reset instructions sent — check your registered email.</span>
+              <span style={{ fontFamily: 'CKCL', fontSize: 13, color: '#FFFFFF' }}>
+                {forgotBusy ? 'Sending…' : 'If an account matches, a reset code has been sent by SMS and email.'}
+              </span>
             </div>
           )}
 
@@ -182,11 +211,11 @@ export default function MemberLoginPage({ onLogin, onNavigate }: {
                   className="login-field"
                   type="text"
                   value={memberId}
-                  placeholder="Member ID"
+                  placeholder="Member no / phone / email"
                   aria-label="Member ID"
                   aria-invalid={!!fieldErrors.memberId}
                   autoComplete="username"
-                  onChange={(e) => { setMemberId(e.target.value); setFieldErrors((p) => ({ ...p, memberId: undefined })); setAuthError(false) }}
+                  onChange={(e) => { setMemberId(e.target.value); setFieldErrors((p) => ({ ...p, memberId: undefined })); setAuthError(null) }}
                   onFocus={() => setFocusedId(true)}
                   onBlur={() => setFocusedId(false)}
                   style={{ ...fieldStyle(!!fieldErrors.memberId, focusedId), letterSpacing: memberId ? '0.05em' : 0 }}
@@ -207,12 +236,12 @@ export default function MemberLoginPage({ onLogin, onNavigate }: {
                   value={password}
                   placeholder="Password"
                   aria-label="Password"
-                  aria-invalid={!!fieldErrors.password || authError}
+                  aria-invalid={!!fieldErrors.password || !!authError}
                   autoComplete="current-password"
-                  onChange={(e) => { setPassword(e.target.value); setFieldErrors((p) => ({ ...p, password: undefined })); setAuthError(false) }}
+                  onChange={(e) => { setPassword(e.target.value); setFieldErrors((p) => ({ ...p, password: undefined })); setAuthError(null) }}
                   onFocus={() => setFocusedPw(true)}
                   onBlur={() => setFocusedPw(false)}
-                  style={{ ...fieldStyle(!!fieldErrors.password || authError, focusedPw), paddingRight: 52 }}
+                  style={{ ...fieldStyle(!!fieldErrors.password || !!authError, focusedPw), paddingRight: 52 }}
                 />
                 <button
                   type="button"
@@ -301,7 +330,8 @@ export default function MemberLoginPage({ onLogin, onNavigate }: {
       >
         <div className="flex items-center gap-1.5" style={{ fontFamily: 'CKCL', fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M14.83 9.17a4 4 0 100 5.66"/></svg>
-          2026 Chittagong Khulshi Club Ltd. All Rights Reserved
+          {/* The © icon is drawn above, so drop a leading © from the Site Info text */}
+          {(site.copyright || `${new Date().getFullYear()} ${site.club_name}`).replace(/^\s*©\s*/, '').trim()}
         </div>
         <div className="flex items-center gap-6">
           <button onClick={() => onNavigate('terms')} className="login-link" style={footerLink}>Terms and Conditions</button>

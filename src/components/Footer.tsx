@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import logoImg from '@/imports/logo-1.png'
 import { useSiteInfo, officeLine } from '../lib/siteInfo'
+import ClubLogo from './ClubLogo'
 
 // Text tones on the dark footer — kept readable (WCAG AA on #0E1116)
 const TONE = {
@@ -61,12 +61,11 @@ function SocialRow({ size }: { size: number }) {
   )
 }
 
-// ─── Logo — original colours, transparent background ─────────────────────────
+// ─── Logo — Site Info logo, or the club name when none is uploaded ───────────
 function FooterLogo({ height, className }: { height: number; className?: string }) {
-  const site = useSiteInfo()
   return (
     <div className={className} style={{ display: 'inline-flex' }}>
-      <img src={site.logo || logoImg} alt={site.club_name} style={{ height, width: 'auto', objectFit: 'contain', display: 'block' }} />
+      <ClubLogo height={height} color="#FFFFFF" />
     </div>
   )
 }
@@ -136,27 +135,8 @@ function AccordionCol({ title, links }: { title: string; links: { label: string;
   )
 }
 
-// ─── Payment badge ─────────────────────────────────────────────────────────────
-const PAYMENT_METHODS = ['VISA', 'Mastercard', 'AMEX', 'bKash', 'Nagad', 'Rocket']
-
-function PayBadge({ label }: { label: string }) {
-  return (
-    <div
-      style={{
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        height: 26, paddingInline: 10,
-        borderRadius: 6,
-        border: '1px solid rgba(255,255,255,0.12)',
-        background: 'rgba(255,255,255,0.05)',
-        fontFamily: 'CKCL', fontWeight: 600,
-        fontSize: 11, letterSpacing: '0.02em', color: TONE.strong,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {label}
-    </div>
-  )
-}
+// ─── Payment methods strip (asset in /favicon) ─────────────────────────────────
+const PAY_METHODS_IMG = '/favicon/footer-desktop-pay.webp'
 
 // ─── Map band ─────────────────────────────────────────────────────────────────
 function MapBand() {
@@ -188,9 +168,9 @@ function MapBand() {
           zIndex: 10,
         }}
       >
-        {/* CKCL wordmark */}
+        {/* Club logo (Site Info) */}
         <div className="mb-4">
-          <img src={site.logo || logoImg} alt={site.club_name} style={{ height: 28, width: 'auto', objectFit: 'contain' }} />
+          <ClubLogo height={28} />
         </div>
         <p style={{ fontFamily: 'CKCL', fontSize: 13, lineHeight: 1.6, color: '#2A3039', margin: '0 0 16px' }}>
           {site.address.full}
@@ -369,11 +349,27 @@ export default function Footer({ maxWidth = 1280 }: { maxWidth?: number }) {
       {/* Payments + bottom bar */}
       <div style={{ borderTop: `1px solid ${TONE.line}` }}>
         <div style={{ maxWidth, margin: '0 auto', padding: '22px clamp(24px,5vw,80px)' }}>
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5" style={{ borderBottom: `1px solid ${TONE.line}` }}>
-            <div className="eyebrow" style={{ fontSize: 10, color: TONE.label }}>We accept</div>
-            <div className="flex flex-wrap gap-2">
-              {PAYMENT_METHODS.map((m) => <PayBadge key={m} label={m} />)}
+          <div
+            className="flex items-center gap-5 pb-5"
+            style={{ borderBottom: `1px solid ${TONE.line}`, width: '100%' }}
+          >
+            <div className="eyebrow" style={{ fontSize: 10, color: TONE.label, flex: '0 0 auto', whiteSpace: 'nowrap' }}>
+              We accept
             </div>
+            <img
+              src={PAY_METHODS_IMG}
+              alt="Accepted payment methods"
+              style={{
+                flex: '1 1 0%',
+                width: '100%',
+                minWidth: 0,
+                height: 'auto',
+                objectFit: 'contain',
+                objectPosition: 'left center',
+                display: 'block',
+                opacity: 0.95,
+              }}
+            />
           </div>
 
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-5">

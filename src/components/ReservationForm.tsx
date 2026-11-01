@@ -1,18 +1,13 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
+import { useMemberSession } from '../lib/memberSession'
 import { useSiteInfo } from '../lib/siteInfo'
 
 // Facility reservation request → POST /api/facilities/{slug}/reservations.
-// The club calls the member back to confirm; the request shows up in the admin under Facilities → Reservations.
+// Members only: signed-in session supplies member_id — guests are asked to sign in.
 
 type BookingConfig = { enabled: boolean; time_slots: string[]; max_guests: number }
 type Reservation = { reference: string; facility: string; date: string; time_slot: string; guests: number }
-
-const FALLBACK: BookingConfig = {
-  enabled: true,
-  time_slots: ['10:00 AM', '11:30 AM', '1:00 PM', '2:30 PM', '4:00 PM', '5:00 PM'],
-  max_guests: 6,
-}
 
 const today = () => {
   const d = new Date()
@@ -33,15 +28,23 @@ const stepBtn: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, color: '#0E1116',
 }
 
-export default function ReservationForm({ facilityId }: { facilityId: string }) {
+export default function ReservationForm({
+  facilityId,
+  onSignIn,
+}: {
+  facilityId: string
+  onSignIn?: () => void
+}) {
   const site = useSiteInfo()
-  const [config, setConfig] = useState<BookingConfig>(FALLBACK)
+  const { session, memberNo } = useMemberSession()
+  const [config, setConfig] = useState<BookingConfig | null>(null)
+  const [configLoading, setConfigLoading] = useState(true)
+  const [configError, setConfigError] = useState('')
   const [date, setDate] = useState('')
   const [slot, setSlot] = useState<string | null>(null)
   const [guests, setGuests] = useState(1)
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
-  const [memberId, setMemberId] = useState('')
   const [note, setNote] = useState('')
   const [showNote, setShowNote] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -49,20 +52,53 @@ export default function ReservationForm({ facilityId }: { facilityId: string }) 
   const [formError, setFormError] = useState('')
   const [done, setDone] = useState<Reservation | null>(null)
 
-  // Slots and guest limit are set per facility in the admin
   useEffect(() => {
     let alive = true
+    setConfigLoading(true)
+    setConfigError('')
     api<{ facility: { booking?: BookingConfig } }>(`/facilities/${facilityId}`)
-      .then((d) => { if (alive && d.facility.booking) setConfig(d.facility.booking) })
-      .catch(() => {})
+      .then((d) => {
+        if (!alive) return
+        const booking = d.facility?.booking
+        if (booking && Array.isArray(booking.time_slots)) {
+          setConfig({
+            enabled: Boolean(booking.enabled),
+            time_slots: booking.time_slots,
+            max_guests: Number(booking.max_guests) || 1,
+          })
+        } else {
+          setConfig(null)
+          setConfigError('Booking times are not configured for this facility.')
+        }
+      })
+      .catch((e: Error) => {
+        if (!alive) return
+        setConfig(null)
+        setConfigError(e.message || 'Could not load booking options.')
+      })
+      .finally(() => { if (alive) setConfigLoading(false) })
     return () => { alive = false }
   }, [facilityId])
 
-  useEffect(() => { setGuests((g) => Math.min(g, config.max_guests || 1)) }, [config.max_guests])
+  useEffect(() => {
+    if (!config) return
+    setGuests((g) => Math.min(g, config.max_guests || 1))
+  }, [config])
+
+  // Prefill contact from the signed-in member — no manual Member ID field.
+  useEffect(() => {
+    if (!session) return
+    setName((n) => n || session.name || '')
+    setPhone((p) => p || session.phone || '')
+  }, [session])
 
   const clear = (key: string) => setErrors((e) => { const { [key]: _, ...rest } = e; return rest })
 
   const submit = async () => {
+    if (!memberNo) {
+      setFormError('Sign in with your membership to request a booking.')
+      return
+    }
     const local: Record<string, string> = {}
     if (!date) local.date = 'Choose a date.'
     if (!slot) local.time_slot = 'Choose a time slot.'
@@ -79,7 +115,7 @@ export default function ReservationForm({ facilityId }: { facilityId: string }) 
         body: JSON.stringify({
           date, time_slot: slot, guests,
           name: name.trim(), phone: phone.trim(),
-          member_id: memberId.trim() || null,
+          member_id: memberNo,
           note: note.trim() || null,
         }),
       })
@@ -97,6 +133,28 @@ export default function ReservationForm({ facilityId }: { facilityId: string }) 
 
   const reset = () => {
     setDone(null); setDate(''); setSlot(null); setGuests(1); setNote(''); setShowNote(false); setErrors({})
+  }
+
+  if (configLoading) {
+    return (
+      <div style={{ fontFamily: 'CKCL', fontSize: 14, color: '#5C6673', lineHeight: 1.6, padding: '8px 0' }}>
+        Loading booking options…
+      </div>
+    )
+  }
+
+  if (!config || configError) {
+    return (
+      <div style={{ fontFamily: 'CKCL', fontSize: 14, color: '#5C6673', lineHeight: 1.6, padding: '8px 0' }}>
+        {configError || 'Booking options are not available.'}{' '}
+        {site.contact.phone && (
+          <>
+            Call the club office at{' '}
+            <a href={site.contact.phone_href ?? undefined} style={{ color: '#E10B17', fontWeight: 600, textDecoration: 'none' }}>{site.contact.phone}</a>.
+          </>
+        )}
+      </div>
+    )
   }
 
   if (!config.enabled) {
@@ -122,16 +180,59 @@ export default function ReservationForm({ facilityId }: { facilityId: string }) 
           Reference <strong style={{ color: '#0E1116', letterSpacing: '0.04em' }}>{done.reference}</strong>
         </div>
         <div style={{ fontFamily: 'CKCL', fontSize: 13, color: '#5C6673' }}>The club will call you to confirm within one business day.</div>
-        <button onClick={reset} style={{ fontFamily: 'CKCL', fontSize: 13, color: '#E10B17', background: 'none', border: 'none', cursor: 'pointer', marginTop: 2 }}>
+        <button type="button" onClick={reset} style={{ fontFamily: 'CKCL', fontSize: 13, color: '#E10B17', background: 'none', border: 'none', cursor: 'pointer', marginTop: 2 }}>
           Make another booking
         </button>
       </div>
     )
   }
 
+  // Guests / signed-out members: don't ask for a Member ID they may not know — send them to login.
+  if (!memberNo) {
+    return (
+      <div style={{ padding: '4px 0 2px' }}>
+        <div style={{ fontFamily: 'CKCL', fontSize: 14, color: '#5C6673', lineHeight: 1.6, marginBottom: 16 }}>
+          Facility bookings are for members. Sign in with your membership — we&apos;ll use your account, so you won&apos;t need to type a Member ID.
+        </div>
+        {onSignIn && (
+          <button
+            type="button"
+            onClick={onSignIn}
+            style={{ width: '100%', padding: '13px', fontFamily: 'CKCL', fontSize: 14, fontWeight: 600, color: '#FFF', background: '#E10B17', border: 'none', borderRadius: 999, cursor: 'pointer', marginBottom: 12 }}
+          >
+            Sign in to reserve
+          </button>
+        )}
+        <div style={{ fontFamily: 'CKCL', fontSize: 13, color: '#5C6673', lineHeight: 1.55, textAlign: 'center' }}>
+          Not a member?{' '}
+          <a href={site.contact.phone_href ?? undefined} style={{ color: '#E10B17', fontWeight: 600, textDecoration: 'none' }}>
+            Call the club office
+          </a>
+          {site.contact.phone ? ` · ${site.contact.phone}` : ''}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <>
-      {/* Date */}
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16,
+          padding: '10px 12px', borderRadius: 12, background: '#FFF1F2', border: '1px solid #FFE4E6',
+        }}
+      >
+        <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#E10B17', flexShrink: 0 }} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: 'CKCL', fontSize: 12, fontWeight: 600, color: '#0E1116' }}>
+            Booking as {memberNo}
+          </div>
+          <div style={{ fontFamily: 'CKCL', fontSize: 12, color: '#5C6673', marginTop: 1 }}>
+            Member ID comes from your signed-in account.
+          </div>
+        </div>
+      </div>
+
       <div style={{ marginBottom: 14 }}>
         <label style={label} htmlFor={`rsv-date-${facilityId}`}>Date</label>
         <input
@@ -145,7 +246,6 @@ export default function ReservationForm({ facilityId }: { facilityId: string }) 
         {errors.date && <div style={errorText}>{errors.date}</div>}
       </div>
 
-      {/* Time slots */}
       <div style={{ marginBottom: 14 }}>
         <div style={label}>Time Slot</div>
         <div className="flex flex-wrap gap-2">
@@ -169,7 +269,6 @@ export default function ReservationForm({ facilityId }: { facilityId: string }) 
         {errors.time_slot && <div style={errorText}>{errors.time_slot}</div>}
       </div>
 
-      {/* Guests */}
       <div className="flex items-center justify-between" style={{ padding: '10px 14px', background: '#F7F8FA', borderRadius: 12, marginBottom: errors.guests ? 4 : 14 }}>
         <span style={{ fontFamily: 'CKCL', fontSize: 13, fontWeight: 600, color: '#0E1116' }}>Guests</span>
         <div className="flex items-center gap-3">
@@ -180,23 +279,16 @@ export default function ReservationForm({ facilityId }: { facilityId: string }) 
       </div>
       {errors.guests && <div style={{ ...errorText, marginBottom: 14 }}>{errors.guests}</div>}
 
-      {/* Who is booking */}
       <div style={{ marginBottom: 12 }}>
         <label style={label} htmlFor={`rsv-name-${facilityId}`}>Your name</label>
         <input id={`rsv-name-${facilityId}`} value={name} onChange={(e) => { setName(e.target.value); clear('name') }} autoComplete="name" maxLength={120} placeholder="Full name" style={field(!!errors.name)} />
         {errors.name && <div style={errorText}>{errors.name}</div>}
       </div>
-      <div className="grid grid-cols-2 gap-3" style={{ marginBottom: 12 }}>
-        <div>
-          <label style={label} htmlFor={`rsv-phone-${facilityId}`}>Phone</label>
-          <input id={`rsv-phone-${facilityId}`} value={phone} onChange={(e) => { setPhone(e.target.value); clear('phone') }} type="tel" autoComplete="tel" maxLength={32} placeholder="01XXXXXXXXX" style={field(!!errors.phone)} />
-        </div>
-        <div>
-          <label style={label} htmlFor={`rsv-member-${facilityId}`}>Member ID <span style={{ fontWeight: 400, color: '#A8B0BB' }}>(optional)</span></label>
-          <input id={`rsv-member-${facilityId}`} value={memberId} onChange={(e) => { setMemberId(e.target.value); clear('member_id') }} maxLength={32} placeholder="CKCL-0000" style={field(!!errors.member_id)} />
-        </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={label} htmlFor={`rsv-phone-${facilityId}`}>Phone</label>
+        <input id={`rsv-phone-${facilityId}`} value={phone} onChange={(e) => { setPhone(e.target.value); clear('phone') }} type="tel" autoComplete="tel" maxLength={32} placeholder="01XXXXXXXXX" style={field(!!errors.phone)} />
+        {errors.phone && <div style={errorText}>{errors.phone}</div>}
       </div>
-      {errors.phone && <div style={{ ...errorText, marginTop: -6, marginBottom: 10 }}>{errors.phone}</div>}
 
       {showNote ? (
         <div style={{ marginBottom: 14 }}>
@@ -226,7 +318,7 @@ export default function ReservationForm({ facilityId }: { facilityId: string }) 
         {busy ? 'Sending…' : 'Request Booking'}
       </button>
       <div style={{ fontFamily: 'CKCL', fontSize: 12, color: '#A8B0BB', textAlign: 'center', marginTop: 10 }}>
-        Members only. Confirmation by phone.
+        Confirmation by phone within one business day.
       </div>
     </>
   )

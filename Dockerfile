@@ -17,6 +17,10 @@ FROM nginx:1.27-alpine AS runtime
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
+# Writes /config.js (API_URL, PORTAL_DOMAIN) from the container env at every start,
+# so the same image serves local, staging or live — set the vars in Coolify.
+COPY --chmod=755 docker/40-app-config.sh /docker-entrypoint.d/40-app-config.sh
+
 EXPOSE 1111
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

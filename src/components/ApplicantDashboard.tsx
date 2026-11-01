@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { REGISTRATION_FEE, applicantName, formCompletion, type ApplicantRecord } from '../data/application'
+import { applicantName, formCompletion, type ApplicantRecord } from '../data/application'
+import { applicationFeeRows, usePortalClubSettings } from '../lib/apply'
 
 // ─── Applicant dashboard ──────────────────────────────────────────────────────
 // A slimmer version of the member portal for people applying to join:
@@ -139,15 +140,40 @@ function Overview({ record, onSection, onPreview }: { record: ApplicantRecord; o
           <DefRow label="Category">{record.form.category || <span style={{ color: T.ink200, fontWeight: 400 }}>Not selected yet</span>}</DefRow>
         </SectionCard>
 
-        <SectionCard title="Payment Info">
-          <DefRow label="Registration fee">BDT {REGISTRATION_FEE.toLocaleString('en-BD')}</DefRow>
-          <DefRow label="Payment status"><span style={{ color: T.amber }}>Not paid</span></DefRow>
-          <p style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, lineHeight: 1.55, margin: '12px 0 0' }}>
-            The club office will send payment details once your form has been reviewed.
-          </p>
-        </SectionCard>
+        <PaymentInfo membershipTypeId={record.form.membership_type_id} />
       </div>
     </div>
+  )
+}
+
+/** Registration fee + the chosen category's fees, both from club-portal/settings. */
+function PaymentInfo({ membershipTypeId }: { membershipTypeId: string }) {
+  const { data: settings, loading, error } = usePortalClubSettings()
+  const type = settings?.membership_types?.find((t) => t.id === membershipTypeId)
+  const { rows, total } = applicationFeeRows(settings?.registration_fee, type?.fees)
+  const bdt = (n: number) => `BDT ${n.toLocaleString('en-BD', { maximumFractionDigits: 0 })}`
+  const muted = { color: T.ink200, fontWeight: 400 }
+
+  return (
+    <SectionCard title="Payment Info">
+      {loading && !settings ? (
+        <DefRow label="Fees"><span style={muted}>Loading…</span></DefRow>
+      ) : error && !settings ? (
+        <DefRow label="Fees"><span style={muted}>Could not load fees</span></DefRow>
+      ) : (
+        <>
+          {rows.map((r, i) => (
+            <DefRow key={i} label={r.when === 'application' ? `${r.label} (with application)` : r.label}>{bdt(r.amount)}</DefRow>
+          ))}
+          {!type && <DefRow label="Category fees"><span style={muted}>Select a category to see fees</span></DefRow>}
+          {rows.length > 0 && <DefRow label="Total">{bdt(total)}</DefRow>}
+        </>
+      )}
+      <DefRow label="Payment status"><span style={{ color: T.amber }}>Not paid</span></DefRow>
+      <p style={{ fontFamily: 'CKCL', fontSize: 12, color: T.ink400, lineHeight: 1.55, margin: '12px 0 0' }}>
+        The club office will send payment details once your form has been reviewed.
+      </p>
+    </SectionCard>
   )
 }
 

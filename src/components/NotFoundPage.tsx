@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
+import { useFacilitiesList } from '../lib/facilities'
+import { useSiteInfo } from '../lib/siteInfo'
 
 const T = {
   ink900: '#0E1116', ink600: '#2A3039', ink400: '#5C6673', ink200: '#A8B0BB', ink100: '#E2E6EC',
@@ -8,8 +10,8 @@ const T = {
 
 type SuggestedLink = { label: string; description: string; page: string; icon: React.ReactNode }
 const SUGGESTED_LINKS: SuggestedLink[] = [
-  { label: 'Home', description: 'Return to the CKCL home page', page: 'home', icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> },
-  { label: 'Facilities', description: 'Explore our 7 member facilities', page: 'facilities', icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><rect x="9" y="12" width="6" height="10" rx="1"/></svg> },
+  { label: 'Home', description: 'Return to the home page', page: 'home', icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> },
+  { label: 'Facilities', description: 'Explore the club facilities', page: 'facilities', icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><rect x="9" y="12" width="6" height="10" rx="1"/></svg> },
   { label: 'Membership', description: 'Learn how to join the club', page: 'membership-process', icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg> },
   { label: 'Contact Us', description: 'Reach the Club Secretariat', page: 'contact', icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.77 19.79 19.79 0 01.02 1.18 2 2 0 012 0h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z"/></svg> },
 ]
@@ -18,6 +20,15 @@ export default function NotFoundPage({ onNavigate }: { onNavigate: (page: string
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   useEffect(() => { setTimeout(() => inputRef.current?.focus(), 300) }, [])
+  const site = useSiteInfo()
+  const clubName = site.short_name || site.club_name
+  // Facility count from the Facilities API rather than a fixed number
+  const { facilities } = useFacilitiesList()
+  const links = SUGGESTED_LINKS.map((l) =>
+    l.page === 'facilities' && facilities.length
+      ? { ...l, description: `Explore our ${facilities.length} member facilit${facilities.length === 1 ? 'y' : 'ies'}` }
+      : l
+  )
 
   return (
     <div
@@ -122,7 +133,7 @@ export default function NotFoundPage({ onNavigate }: { onNavigate: (page: string
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && query.trim()) onNavigate('search') }}
-              placeholder="Search the CKCL website…"
+              placeholder={clubName ? `Search the ${clubName} website…` : 'Search the website…'}
               style={{ flex: 1, fontFamily: 'CKCL', fontSize: 15, color: T.ink900, background: 'transparent', border: 'none', outline: 'none' }}
             />
             {query && (
@@ -141,7 +152,7 @@ export default function NotFoundPage({ onNavigate }: { onNavigate: (page: string
           <div style={{ textAlign: 'left' }}>
             <div className="eyebrow mb-3" style={{ fontSize: 9, color: T.ink200, textAlign: 'left' }}>SUGGESTED PAGES</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {SUGGESTED_LINKS.map((link) => (
+              {links.map((link) => (
                 <button
                   key={link.page}
                   onClick={() => onNavigate(link.page)}
